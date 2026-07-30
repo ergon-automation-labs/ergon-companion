@@ -6,8 +6,8 @@ defmodule BotArmyCompanion.NATS.Consumer do
   Uses standardized Reply format for request/reply patterns.
 
   All request/reply handlers should return responses using Reply helpers:
-  - BotArmyRuntime.NATS.Reply.ok(data) for success
-  - BotArmyRuntime.NATS.Reply.error(message, code) for errors
+  - BotArmyLibraryRuntime.NATS.Reply.ok(data) for success
+  - BotArmyLibraryRuntime.NATS.Reply.error(message, code) for errors
   """
 
   use GenServer
@@ -44,7 +44,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
 
   @impl true
   def handle_continue(:connect, state) do
-    case GenServer.call(BotArmyRuntime.NATS.Connection, :get_connection, 5000) do
+    case GenServer.call(BotArmyLibraryRuntime.NATS.Connection, :get_connection, 5000) do
       {:ok, conn} ->
         handle_nats_connected(conn, state)
 
@@ -56,7 +56,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
   end
 
   defp handle_nats_connected(conn, state) do
-    BotArmyRuntime.NATS.Connection.subscribe_to_status()
+    BotArmyLibraryRuntime.NATS.Connection.subscribe_to_status()
     Logger.info("Connected to NATS, subscribing to topics")
 
     subscriptions =
@@ -67,7 +67,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
       |> Enum.filter(&(not is_nil(&1)))
 
     # Register subjects for runtime discovery
-    BotArmyRuntime.Registry.register("companion", @subjects, @version)
+    BotArmyLibraryRuntime.Registry.register("companion", @subjects, @version)
 
     {:noreply, %{state | subscriptions: subscriptions, conn: conn}}
   end
@@ -91,7 +91,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
 
   @impl true
   def handle_info({:msg, msg}, state) do
-    BotArmyRuntime.Tracing.with_consumer_span(msg.topic, Map.get(msg, :headers), fn ->
+    BotArmyLibraryRuntime.Tracing.with_consumer_span(msg.topic, Map.get(msg, :headers), fn ->
       Logger.debug("Received NATS message on subject: #{msg.topic}")
       process_message(msg)
     end)
@@ -136,7 +136,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
   end
 
   defp handle_pubsub(msg) do
-    case BotArmyCore.NATS.Decoder.decode(msg.body) do
+    case BotArmyLibraryCore.NATS.Decoder.decode(msg.body) do
       {:ok, decoded_message} ->
         route_message(decoded_message, msg.topic)
 
@@ -163,10 +163,10 @@ defmodule BotArmyCompanion.NATS.Consumer do
   #   response =
   #     case get_tasks() do
   #       {:ok, tasks} ->
-  #         BotArmyRuntime.NATS.Reply.ok(%{"tasks" => tasks})
+  #         BotArmyLibraryRuntime.NATS.Reply.ok(%{"tasks" => tasks})
   #
   #       {:error, reason} ->
-  #         BotArmyRuntime.NATS.Reply.error(inspect(reason), :list_failed)
+  #         BotArmyLibraryRuntime.NATS.Reply.error(inspect(reason), :list_failed)
   #     end
   #
   #   if state.conn do
