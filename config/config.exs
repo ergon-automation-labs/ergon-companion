@@ -2,6 +2,9 @@ import Config
 
 config :logger,
   level: :info,
+  backends: [:console]
+
+config :logger, :console,
   format: "$time $metadata[$level] $message\n",
   metadata: [:request_id, :task_id]
 
