@@ -18,9 +18,11 @@ defmodule BotArmyCompanion.NATS.Consumer do
 
   # Register subjects with their metadata for runtime discovery
   @subjects [
-    # Add your subjects here:
-    # %{subject: "example.task.list", type: :request_reply, description: "List tasks"},
-    # %{subject: "example.event.>", type: :subscribe, description: "Example events"}
+    %{
+      subject: "companion.heartbeat",
+      type: :request_reply,
+      description: "Companion heartbeat - reflect on context and system state"
+    }
   ]
 
   def start_link(opts) do
@@ -130,8 +132,15 @@ defmodule BotArmyCompanion.NATS.Consumer do
 
   # Message routing
   defp route_message(message, topic) do
-    # Route decoded messages to appropriate handlers
-    Logger.debug("Routing message from #{topic}")
+    event = message["event"]
+
+    case event do
+      "companion.heartbeat" ->
+        BotArmyCompanion.Handlers.HeartbeatHandler.handle_heartbeat(message)
+
+      _ ->
+        Logger.debug("Unknown companion event type: #{event} from #{topic}")
+    end
   end
 
   # Request/reply handlers
