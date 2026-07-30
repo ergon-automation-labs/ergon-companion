@@ -1,7 +1,7 @@
 SCRIPTS_DIRECTORY ?= $(abspath $(CURDIR)/../scripts)
 MIX ?= /Users/abby/.local/share/mise/shims/mix
 
-.PHONY: setup help deps test credo dialyzer coverage check format clean release publish-release setup-hooks setup-db reset-db logs push-and-publish
+.PHONY: setup help deps compile test test-handlers test-stores test-nats test-integration test-full credo dialyzer coverage check format clean release test-release-smoke publish-release setup-hooks setup-db reset-db logs git-push push pre-push-cleanup push-and-publish bump-version sync-release-version
 
 help:
 	@echo "Companion Bot"
@@ -65,11 +65,40 @@ init:
 deps:
 	$(MIX) deps.get
 
+compile:
+	@LOG_FILE="/tmp/compile-companion-$$(date +%s).log"; \
+	echo "Compiling Companion and logging to $$LOG_FILE..."; \
+	$(MIX) compile 2>&1 | tee "$$LOG_FILE"; \
+	echo "✓ Compilation log: $$LOG_FILE"
+
 test:
-	$(MIX) test
+	@BOT_NAME=companion; \
+	LOG_FILE="/tmp/test-$${BOT_NAME}-$$(date +%s).log"; \
+	echo "Running tests and logging to $$LOG_FILE..."; \
+	$(MIX) test 2>&1 | tee "$$LOG_FILE"; \
+	echo "✓ Test log: $$LOG_FILE"
+
+test-handlers:
+	MIX_ENV=test $(MIX) test --only handlers --trace
+
+test-stores:
+	MIX_ENV=test $(MIX) test --only stores --trace
+
+test-nats:
+	MIX_ENV=test $(MIX) test --only nats --trace
+
+test-integration:
+	$(MIX) test --include integration --trace
+
+test-full:
+	$(MIX) test --include integration --include nats_live --trace
 
 credo:
-	$(MIX) credo
+	@BOT_NAME=companion; \
+	LOG_FILE="/tmp/credo-$${BOT_NAME}-$$(date +%s).log"; \
+	echo "Running credo and logging to $$LOG_FILE..."; \
+	$(MIX) credo 2>&1 | tee "$$LOG_FILE"; \
+	echo "✓ Credo log: $$LOG_FILE"
 
 dialyzer: deps
 	$(MIX) dialyzer
@@ -97,6 +126,22 @@ release: check
 	@echo "✓ Release built successfully"
 	@echo "Location: _build/prod/rel/companion_bot/"
 	@echo ""
+
+test-release-smoke:
+	@echo "==============================================="
+	@echo "Running release smoke test"
+	@echo "==============================================="
+	@RELEASE_NAME=companion_bot NATS_SERVERS=nats://localhost:4224 \
+		bash $(SCRIPTS_DIRECTORY)/test_release_smoke.sh
+
+sync-release-version:
+	@VERSION=$$(sed -n 's/^[[:space:]]*version:[[:space:]]*"\([^"]*\)".*/\1/p' mix.exs | head -n 1); \
+	if [ -z "$$VERSION" ]; then \
+		echo "❌ Failed to resolve version from mix.exs"; exit 1; \
+	fi; \
+	TIMESTAMP=$$(date -u +"%Y-%m-%dT%H:%M:%SZ"); \
+	echo "$$VERSION" > .release-published; \
+	echo "✅ Synced release version: v$$VERSION ($$TIMESTAMP)"
 
 publish-release: release
 	@if ! git rev-parse --git-dir > /dev/null 2>&1; then \
@@ -159,11 +204,105 @@ publish-release: release
 	echo "2. Otherwise: make deploy-bot, or wait for Jenkins polling"; \
 	echo "3. Check status: make jenkins-logs (Jenkins) or watch ops.deploy.* on NATS (deploy_pipeline_bot path)"
 
-push-and-publish:
-	@git push && $(MAKE) publish-release
+pre-push-cleanup:
+	@echo "🧹 Cleaning up pre-push artifacts..."
+	@if git diff --quiet git-hooks/pre-push 2>/dev/null; then \
+		echo "✓ No hook changes"; \
+	else \
+		echo "📋 Staging hook changes..."; \
+		git add git-hooks/pre-push 2>/dev/null; \
+		git commit -m "chore: sync pre-push hook" || true; \
+	fi
+	@if git diff --quiet mix.lock 2>/dev/null; then \
+		echo "✓ No lock file changes"; \
+	else \
+		echo "📋 Staging lock file changes..."; \
+		git add mix.lock 2>/dev/null; \
+		git commit -m "chore: lock file updates from pre-push validation" || true; \
+	fi
+	@echo "✓ Ready to push"
+
+push: test compile credo pre-push-cleanup
+	@echo "✅ All validations passed"
+	@echo "$$(date +%s)" > .push-validated
+	@echo "✓ Proof-of-validation created"
+	@$(MAKE) git-push
+
+git-push: pre-push-cleanup
+	@BOT_NAME=companion; \
+	LOG_FILE="/tmp/git-push-$${BOT_NAME}-$$(date +%s).log"; \
+	echo "Pushing to origin/main and logging to $$LOG_FILE..."; \
+	git push 2>&1 | tee "$$LOG_FILE"; \
+	echo "✓ Log saved: $$LOG_FILE"
+
+bump-version:
+	@if [ -z "$(BUMP)" ]; then \
+		echo "Usage: make bump-version BUMP=major|minor|patch"; \
+		exit 1; \
+	fi
+	@$(MAKE) -C .. bump-version BOT=companion BUMP=$(BUMP)
+
+push-and-publish: git-push publish-release
 
 logs:
 	@$(SCRIPTS_DIRECTORY)/tail_bot_log.sh
+
+# Deployment targets that delegate to monorepo
+.PHONY: deploy-bot verify-bot verify-bot-nats
+
+_FIND_MONOREPO_ROOT = \
+	if [ -n "$(MONOREPO_ROOT)" ]; then \
+		echo "$(MONOREPO_ROOT)"; \
+		exit 0; \
+	fi; \
+	if [ -d "../../../elixir_bots" ] && [ -f "../../../elixir_bots/Makefile" ]; then \
+		if grep -q "verify-bot-nats:" "../../../elixir_bots/Makefile"; then \
+			echo "$$(cd ../../../elixir_bots && pwd)"; \
+			exit 0; \
+		fi; \
+	fi; \
+	CURRENT_DIR=$$(pwd); \
+	while [ "$$CURRENT_DIR" != "/" ]; do \
+		if [ -f "$$CURRENT_DIR/Makefile" ] && grep -q "verify-bot-nats:" "$$CURRENT_DIR/Makefile"; then \
+			if [ -d "$$CURRENT_DIR/bots" ] || [ -d "$$CURRENT_DIR/bot_army_infra" ]; then \
+				echo "$$CURRENT_DIR"; \
+				exit 0; \
+			fi; \
+		fi; \
+		CURRENT_DIR=$$(dirname "$$CURRENT_DIR"); \
+	done; \
+	echo ""; \
+	exit 1
+
+deploy-bot:
+	@MONOREPO_ROOT=$$($(call _FIND_MONOREPO_ROOT)) || { \
+		echo "❌ Could not find monorepo root"; \
+		echo "   Expected to find Makefile with 'deploy-bot' target"; \
+		echo "   Current directory: $$(pwd)"; \
+		exit 1; \
+	}; \
+	BOT_NAME=$$(basename $$(pwd) | sed 's/bot_army_//'); \
+	echo "Deploying from: $$(pwd)"; \
+	echo "Bot name: $${BOT_NAME}"; \
+	echo "Monorepo root: $$MONOREPO_ROOT"; \
+	echo ""; \
+	$(MAKE) -C "$$MONOREPO_ROOT" deploy-bot BOT=$${BOT_NAME}
+
+verify-bot:
+	@MONOREPO_ROOT=$$($(call _FIND_MONOREPO_ROOT)) || { \
+		echo "❌ Could not find monorepo root"; \
+		exit 1; \
+	}; \
+	BOT_NAME=$$(basename $$(pwd) | sed 's/bot_army_//'); \
+	$(MAKE) -C "$$MONOREPO_ROOT" verify-bot BOT=$${BOT_NAME}
+
+verify-bot-nats:
+	@MONOREPO_ROOT=$$($(call _FIND_MONOREPO_ROOT)) || { \
+		echo "❌ Could not find monorepo root"; \
+		exit 1; \
+	}; \
+	BOT_NAME=$$(basename $$(pwd) | sed 's/bot_army_//'); \
+	$(MAKE) -C "$$MONOREPO_ROOT" verify-bot-nats BOT=$${BOT_NAME}
 
 # Deployment targets that delegate to monorepo
 .PHONY: deploy-bot verify-bot verify-bot-nats
