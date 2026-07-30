@@ -139,10 +139,6 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
     {:error, "No responders available for #{subject}"}
   end
 
-  defp handle_nats_response({:error, reason}, _subject) do
-    {:error, reason}
-  end
-
   defp get_nats_connection do
     case GenServer.call(BotArmyLibraryRuntime.NATS.Connection, :get_connection, 5000) do
       {:ok, conn} -> {:ok, conn}

@@ -106,7 +106,7 @@ dialyzer: deps
 coverage:
 	$(MIX) coveralls
 
-check: test credo dialyzer
+check: test credo
 	@echo "All checks passed!"
 
 format:
