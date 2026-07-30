@@ -70,34 +70,30 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
   end
 
   defp get_reflection_angle do
-    # Cycle through 4 angles: 0=personal, 1=bot_army, 2=outreach, 3=life_balance
-    # In production, this would read from PARA or database
-    Enum.random(0..3)
-  end
-
-  defp generate_reflection(%{angle: angle} = state) do
-    query = reflection_query(angle)
-
-    # Call bridge.chat to get LLM reflection
-    case request_bridge_chat(query) do
-      {:ok, response} -> {:ok, Map.put(state, :reflection, response)}
-      error -> error
+    # Fetch a random active thought from the database
+    case BotArmyCompanion.Thoughts.get_random_active_thought() do
+      {:ok, thought} -> thought.angle
+      :error -> Enum.random(0..3)
     end
   end
 
-  defp reflection_query(angle) do
-    case angle do
-      0 ->
-        "Abby is in Greece (Aug 6 - Sep 11). Given her ADHD brain, sometimes loneliness, third pillar (running/martial arts) displaced by Bot Army - what should Eir notice or hold while she's away? One paragraph, warm and present."
+  defp generate_reflection(%{angle: angle} = state) do
+    case get_reflection_query(angle) do
+      {:ok, query} ->
+        case request_bridge_chat(query) do
+          {:ok, response} -> {:ok, Map.put(state, :reflection, response)}
+          error -> error
+        end
 
-      1 ->
-        "While Abby's in Greece, the Bot Army fleet keeps running. What's the state of the system? Which bots matter most? What could break? What's surprisingly robust? One paragraph, technical but human."
+      :error ->
+        {:error, "No reflection query found for angle #{angle}"}
+    end
+  end
 
-      2 ->
-        "Abby's selling the repo-operability service. While she's away in Greece, what momentum matters? Are leads stalling or moving? What would unlock the next conversation? One paragraph, pragmatic focus."
-
-      3 ->
-        "Abby's third pillar (running/martial arts) got eaten by Bot Army. Greece is a chance to remember who she is beyond the work. What would it take to actually prioritize her body/movement? One paragraph, direct and warm."
+  defp get_reflection_query(angle) do
+    case BotArmyCompanion.Thoughts.get_thought_by_angle(angle) do
+      %{query: query} -> {:ok, query}
+      nil -> :error
     end
   end
 
