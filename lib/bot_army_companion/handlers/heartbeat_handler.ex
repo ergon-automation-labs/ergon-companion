@@ -117,23 +117,30 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
 
   defp call_nats_subject(subject, payload, timeout_ms) do
     with {:ok, conn} <- get_nats_connection() do
-      case Gnat.request(conn, subject, Jason.encode!(payload), receive_timeout: timeout_ms) do
-        {:ok, msg} ->
-          case Jason.decode(msg.body) do
-            {:ok, decoded} -> {:ok, decoded}
-            {:error, _} -> {:ok, msg.body}
-          end
-
-        {:error, :timeout} ->
-          {:error, "NATS request timeout"}
-
-        {:error, :no_responders} ->
-          {:error, "No responders available for #{subject}"}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+      handle_nats_response(
+        Gnat.request(conn, subject, Jason.encode!(payload), receive_timeout: timeout_ms),
+        subject
+      )
     end
+  end
+
+  defp handle_nats_response({:ok, msg}, _subject) do
+    case Jason.decode(msg.body) do
+      {:ok, decoded} -> {:ok, decoded}
+      {:error, _} -> {:ok, msg.body}
+    end
+  end
+
+  defp handle_nats_response({:error, :timeout}, _subject) do
+    {:error, "NATS request timeout"}
+  end
+
+  defp handle_nats_response({:error, :no_responders}, subject) do
+    {:error, "No responders available for #{subject}"}
+  end
+
+  defp handle_nats_response({:error, reason}, _subject) do
+    {:error, reason}
   end
 
   defp get_nats_connection do

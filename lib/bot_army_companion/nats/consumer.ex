@@ -46,35 +46,41 @@ defmodule BotArmyCompanion.NATS.Consumer do
   def handle_continue(:connect, state) do
     case GenServer.call(BotArmyRuntime.NATS.Connection, :get_connection, 5000) do
       {:ok, conn} ->
-        BotArmyRuntime.NATS.Connection.subscribe_to_status()
-        Logger.info("Connected to NATS, subscribing to topics")
-
-        subscriptions =
-          [
-            # Add your subjects here
-          ]
-          |> Enum.map(fn subject ->
-            case Gnat.sub(conn, self(), subject) do
-              {:ok, sub} ->
-                Logger.info("Subscribed to #{subject}")
-                sub
-
-              {:error, reason} ->
-                Logger.error("Failed to subscribe to #{subject}: #{inspect(reason)}")
-                nil
-            end
-          end)
-          |> Enum.filter(&(not is_nil(&1)))
-
-        # Register subjects for runtime discovery
-        BotArmyRuntime.Registry.register("companion", @subjects, @version)
-
-        {:noreply, %{state | subscriptions: subscriptions, conn: conn}}
+        handle_nats_connected(conn, state)
 
       {:error, _reason} ->
         Logger.warning("NATS connection not ready, will retry")
         Process.send_after(self(), :connect_retry, @reconnect_delay_ms)
         {:noreply, state}
+    end
+  end
+
+  defp handle_nats_connected(conn, state) do
+    BotArmyRuntime.NATS.Connection.subscribe_to_status()
+    Logger.info("Connected to NATS, subscribing to topics")
+
+    subscriptions =
+      [
+        # Add your subjects here
+      ]
+      |> Enum.map(&subscribe_to_subject(conn, &1))
+      |> Enum.filter(&(not is_nil(&1)))
+
+    # Register subjects for runtime discovery
+    BotArmyRuntime.Registry.register("companion", @subjects, @version)
+
+    {:noreply, %{state | subscriptions: subscriptions, conn: conn}}
+  end
+
+  defp subscribe_to_subject(conn, subject) do
+    case Gnat.sub(conn, self(), subject) do
+      {:ok, sub} ->
+        Logger.info("Subscribed to #{subject}")
+        sub
+
+      {:error, reason} ->
+        Logger.error("Failed to subscribe to #{subject}: #{inspect(reason)}")
+        nil
     end
   end
 
@@ -87,29 +93,28 @@ defmodule BotArmyCompanion.NATS.Consumer do
   def handle_info({:msg, msg}, state) do
     BotArmyRuntime.Tracing.with_consumer_span(msg.topic, Map.get(msg, :headers), fn ->
       Logger.debug("Received NATS message on subject: #{msg.topic}")
-
-      # Handle request/reply patterns
-      if msg.reply_to do
-        case msg.topic do
-          # Add your request/reply handlers here
-          # "example.task.list" ->
-          #   handle_task_list(msg, state)
-          _ ->
-            Logger.debug("Unknown request/reply subject: #{msg.topic}")
-        end
-      else
-        # Handle pub/sub messages
-        case BotArmyCore.NATS.Decoder.decode(msg.body) do
-          {:ok, decoded_message} ->
-            route_message(decoded_message, msg.topic)
-
-          {:error, reason} ->
-            Logger.warning("Failed to decode message from #{msg.topic}: #{inspect(reason)}")
-        end
-      end
+      process_message(msg)
     end)
 
     {:noreply, state}
+  end
+
+  defp process_message(msg) do
+    if msg.reply_to do
+      handle_request_reply(msg)
+    else
+      handle_pubsub(msg)
+    end
+  end
+
+  defp handle_request_reply(msg) do
+    case msg.topic do
+      # Add your request/reply handlers here
+      # "example.task.list" ->
+      #   handle_task_list(msg, state)
+      _ ->
+        Logger.debug("Unknown request/reply subject: #{msg.topic}")
+    end
   end
 
   @impl true
@@ -128,6 +133,16 @@ defmodule BotArmyCompanion.NATS.Consumer do
   @impl true
   def handle_info(:reconnect, state) do
     {:noreply, state, {:continue, :connect}}
+  end
+
+  defp handle_pubsub(msg) do
+    case BotArmyCore.NATS.Decoder.decode(msg.body) do
+      {:ok, decoded_message} ->
+        route_message(decoded_message, msg.topic)
+
+      {:error, reason} ->
+        Logger.warning("Failed to decode message from #{msg.topic}: #{inspect(reason)}")
+    end
   end
 
   # Message routing

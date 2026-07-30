@@ -54,9 +54,10 @@ defmodule BotArmyCompanion.PulsePublisher do
   end
 
   @impl true
-  def handle_cast({:record_metric, _key, _value}, state) do
-    # TODO: Track metric in state for next pulse publish
-    {:noreply, state}
+  def handle_cast({:record_metric, key, value}, state) do
+    metrics = Map.get(state, :metrics, %{})
+    updated_metrics = Map.put(metrics, key, value)
+    {:noreply, Map.put(state, :metrics, updated_metrics)}
   end
 
   # ============================================================================
@@ -65,14 +66,13 @@ defmodule BotArmyCompanion.PulsePublisher do
 
   defp publish_pulse do
     signal = health_signal()
+    metrics = collect_metrics()
 
     pulse = %{
       service: @service_name,
       timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
       health: signal,
-      # TODO: Add domain-specific metrics here
-      # Examples: active_sessions, items_processed, errors_in_window
-      metrics: %{}
+      metrics: metrics
     }
 
     case BotArmyRuntime.NATS.Publisher.publish("bot.#{@service_name}.pulse", pulse) do
@@ -87,7 +87,9 @@ defmodule BotArmyCompanion.PulsePublisher do
   defp publish_system_health(%{started_at: started_at}) do
     tenant_id = System.get_env("BOT_ARMY_TENANT_ID") || BotArmyRuntime.Tenant.default_tenant_id()
     signal = health_signal()
-    uptime_seconds = DateTime.diff(DateTime.utc_now() |> DateTime.truncate(:second), started_at, :second)
+
+    uptime_seconds =
+      DateTime.diff(DateTime.utc_now() |> DateTime.truncate(:second), started_at, :second)
 
     case BotArmyRuntime.SynapseHealth.publish(
            source_node: node() |> Atom.to_string(),
@@ -105,12 +107,23 @@ defmodule BotArmyCompanion.PulsePublisher do
     end
   end
 
+  defp collect_metrics do
+    active_thoughts = count_active_thoughts()
+    %{active_thoughts: active_thoughts}
+  end
+
+  defp count_active_thoughts do
+    try do
+      BotArmyCompanion.Thoughts.list_active_thoughts() |> Enum.count()
+    rescue
+      _ -> 0
+    end
+  end
+
   defp health_signal do
-    # TODO: Implement health signal logic based on domain metrics
-    # Examples:
-    #   - Return :critical if error_count > threshold
-    #   - Return :degraded if activity_count == 0
-    #   - Return :nominal otherwise
-    :nominal
+    case count_active_thoughts() do
+      0 -> :degraded
+      _ -> :nominal
+    end
   end
 end
