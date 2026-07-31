@@ -61,7 +61,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
 
     subscriptions =
       [
-        # Add your subjects here
+        "companion.heartbeat"
       ]
       |> Enum.map(&subscribe_to_subject(conn, &1))
       |> Enum.filter(&(not is_nil(&1)))
