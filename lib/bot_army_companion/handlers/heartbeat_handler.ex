@@ -106,11 +106,16 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
     case call_nats_subject("bridge.chat", payload, 10_000) do
       {:ok, response} ->
         case Map.get(response, "data") do
-          %{"response" => text} -> {:ok, text}
-          _ -> {:error, "Invalid response format from bridge.chat"}
+          %{"response" => text} ->
+            {:ok, text}
+
+          _ ->
+            Logger.error("bridge.chat unexpected response shape: #{inspect(response)}")
+            {:error, "Invalid response format from bridge.chat"}
         end
 
       error ->
+        Logger.error("bridge.chat call_nats_subject error: #{inspect(error)}")
         error
     end
   end
