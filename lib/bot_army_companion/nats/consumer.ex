@@ -109,12 +109,36 @@ defmodule BotArmyCompanion.NATS.Consumer do
 
   defp handle_request_reply(msg) do
     case msg.topic do
-      # Add your request/reply handlers here
-      # "example.task.list" ->
-      #   handle_task_list(msg, state)
+      "companion.heartbeat" ->
+        handle_heartbeat_request(msg)
+
       _ ->
         Logger.debug("Unknown request/reply subject: #{msg.topic}")
     end
+  end
+
+  defp handle_heartbeat_request(msg) do
+    response =
+      case BotArmyCompanion.Handlers.HeartbeatHandler.handle_heartbeat(msg.body) do
+        {:reply, %{ok: true, data: data}} ->
+          BotArmyLibraryRuntime.NATS.Reply.ok(data)
+
+        {:reply, %{ok: false, error: reason}} ->
+          BotArmyLibraryRuntime.NATS.Reply.error(reason, :heartbeat_failed)
+      end
+
+    case GenServer.call(BotArmyLibraryRuntime.NATS.Connection, :get_connection, 5000) do
+      {:ok, conn} ->
+        Gnat.pub(conn, msg.reply_to, response)
+
+      {:error, reason} ->
+        Logger.warning(
+          "Failed to get NATS connection to reply to companion.heartbeat: #{inspect(reason)}"
+        )
+    end
+  rescue
+    e ->
+      Logger.error("Error handling companion.heartbeat request: #{inspect(e)}")
   end
 
   @impl true
