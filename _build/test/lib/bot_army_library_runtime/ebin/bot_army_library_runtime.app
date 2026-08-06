@@ -1,5 +1,5 @@
 {application,bot_army_library_runtime,
-    [{config_mtime,1785415821},
+    [{config_mtime,1785444931},
      {compile_env,[{bot_army_library_runtime,[auto_start_services],error}]},
      {optional_applications,[]},
      {applications,

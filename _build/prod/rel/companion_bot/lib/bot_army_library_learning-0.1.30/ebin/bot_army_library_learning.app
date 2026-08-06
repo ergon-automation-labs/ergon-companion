@@ -1,5 +1,5 @@
 {application,bot_army_library_learning,
-             [{config_mtime,1784415926},
+             [{config_mtime,1785444931},
               {optional_applications,[]},
               {applications,[kernel,stdlib,elixir,logger,
                              bot_army_library_core,bot_army_library_runtime,

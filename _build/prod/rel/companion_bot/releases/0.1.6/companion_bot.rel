@@ -1,11 +1,11 @@
 %% coding: utf-8
-{release,{"companion_bot","0.1.0"},
+{release,{"companion_bot","0.1.6"},
          {erts,"15.2.7.5"},
          [{kernel,"10.2.7.3",permanent},
           {stdlib,"6.2.2.2",permanent},
           {elixir,"1.17.3",permanent},
           {sasl,"4.2.2",permanent},
-          {bot_army_companion,"0.1.0",permanent},
+          {bot_army_companion,"0.1.6",permanent},
           {iex,"1.17.3",none},
           {acceptor_pool,"1.0.1",permanent},
           {asn1,"5.3.4.2",permanent},

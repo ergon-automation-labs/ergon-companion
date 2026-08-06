@@ -1,5 +1,5 @@
 {application,bot_army_companion,
-             [{config_mtime,1785419175},
+             [{config_mtime,1785529087},
               {optional_applications,[]},
               {applications,[kernel,stdlib,elixir,logger,
                              bot_army_library_core,bot_army_library_runtime,
@@ -13,8 +13,9 @@
                         'Elixir.BotArmyCompanion.Handlers.HeartbeatHandler',
                         'Elixir.BotArmyCompanion.NATS.Consumer',
                         'Elixir.BotArmyCompanion.PulsePublisher',
+                        'Elixir.BotArmyCompanion.Release',
                         'Elixir.BotArmyCompanion.Repo',
                         'Elixir.BotArmyCompanion.Thoughts']},
               {registered,[]},
-              {vsn,"0.1.0"},
+              {vsn,"0.1.6"},
               {mod,{'Elixir.BotArmyCompanion.Application',[]}}]}.
