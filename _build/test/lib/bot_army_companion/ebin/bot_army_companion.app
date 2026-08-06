@@ -1,5 +1,5 @@
 {application,bot_army_companion,
-             [{config_mtime,1785529087},
+             [{config_mtime,1785981405},
               {optional_applications,[]},
               {applications,[kernel,stdlib,elixir,logger,
                              bot_army_library_core,bot_army_library_runtime,
@@ -18,5 +18,5 @@
                         'Elixir.BotArmyCompanion.Repo',
                         'Elixir.BotArmyCompanion.Thoughts']},
               {registered,[]},
-              {vsn,"0.1.6"},
+              {vsn,"0.1.7"},
               {mod,{'Elixir.BotArmyCompanion.Application',[]}}]}.
