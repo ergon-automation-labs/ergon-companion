@@ -270,9 +270,9 @@ _FIND_MONOREPO_ROOT = \
 		echo "$(MONOREPO_ROOT)"; \
 		exit 0; \
 	fi; \
-	if [ -d "../../../elixir_bots" ] && [ -f "../../../elixir_bots/Makefile" ]; then \
-		if grep -q "verify-bot-nats:" "../../../elixir_bots/Makefile"; then \
-			echo "$$(cd ../../../elixir_bots && pwd)"; \
+	if [ -d "../../elixir_bots" ] && [ -f "../../elixir_bots/Makefile" ]; then \
+		if grep -q "verify-bot-nats:" "../../elixir_bots/Makefile"; then \
+			echo "$$(cd ../../elixir_bots && pwd)"; \
 			exit 0; \
 		fi; \
 	fi; \
@@ -327,9 +327,9 @@ _FIND_MONOREPO_ROOT = \
 		echo "$(MONOREPO_ROOT)"; \
 		exit 0; \
 	fi; \
-	if [ -d "../../../elixir_bots" ] && [ -f "../../../elixir_bots/Makefile" ]; then \
-		if grep -q "verify-bot-nats:" "../../../elixir_bots/Makefile"; then \
-			echo "$$(cd ../../../elixir_bots && pwd)"; \
+	if [ -d "../../elixir_bots" ] && [ -f "../../elixir_bots/Makefile" ]; then \
+		if grep -q "verify-bot-nats:" "../../elixir_bots/Makefile"; then \
+			echo "$$(cd ../../elixir_bots && pwd)"; \
 			exit 0; \
 		fi; \
 	fi; \
@@ -353,7 +353,7 @@ deploy-bot:
 		echo "   Current directory: $$(pwd)"; \
 		exit 1; \
 	}; \
-	BOT_NAME=$$(basename $$(pwd) | sed 's/bot_army_//')
+	BOT_NAME=$$(basename $$(pwd) | sed 's/bot_army_//'); \
 	echo "Deploying from: $$(pwd)"; \
 	echo "Bot: $$BOT_NAME"; \
 	echo "Monorepo root: $$MONOREPO_ROOT"; \
