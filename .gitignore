@@ -1,0 +1,25 @@
+# Build artifacts
+/_build/
+/cover/
+/deps/
+/doc/
+/.fetch
+*.ez
+*.beam
+/config/*.secret.exs
+.elixir_ls/
+
+# Erlang crash dumps
+erl_crash.dump
+
+# Dialyzer PLTs
+/priv/plts/
+*.plt
+*.plt.hash
+
+# Local env
+.env
+.env.local
+
+# Release artifacts
+*.tar.gz
