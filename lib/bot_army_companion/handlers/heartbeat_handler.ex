@@ -152,8 +152,9 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
   end
 
   defp write_to_para(reflection) do
-    # Write to PARA at companion/observations/{date}.md
-    path = "/companion/observations/#{Date.utc_today()}.md"
+    # Write to PARA at companion/observations/{date}-{angle}.md
+    angle = Map.get(reflection, :angle, "unknown")
+    path = "/companion/observations/#{Date.utc_today()}-angle-#{angle}.md"
     content = format_para_content(reflection)
 
     payload = %{
