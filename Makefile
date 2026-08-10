@@ -240,7 +240,22 @@ bump-version:
 		echo "Usage: make bump-version BUMP=major|minor|patch"; \
 		exit 1; \
 	fi
-	@$(MAKE) -C .. bump-version BOT=companion BUMP=$(BUMP)
+	@CURRENT_VERSION=$$(sed -n 's/^[[:space:]]*version:[[:space:]]*"\([^"]*\)".*/\1/p' mix.exs | head -n 1); \
+	if [ -z "$$CURRENT_VERSION" ]; then \
+		echo "Failed to read current version from mix.exs"; \
+		exit 1; \
+	fi; \
+	IFS='.' read -r MAJOR MINOR PATCH <<< "$$CURRENT_VERSION"; \
+	case "$(BUMP)" in \
+		major) NEW_VERSION="$$((MAJOR + 1)).0.0" ;; \
+		minor) NEW_VERSION="$$MAJOR.$$((MINOR + 1)).0" ;; \
+		patch) NEW_VERSION="$$MAJOR.$$MINOR.$$((PATCH + 1))" ;; \
+		*) echo "Invalid BUMP: $(BUMP). Use major|minor|patch"; exit 1 ;; \
+	esac; \
+	sed -i '' "s/version: \"$$CURRENT_VERSION\"/version: \"$$NEW_VERSION\"/" mix.exs; \
+	git add mix.exs; \
+	git commit -m "chore: bump companion to $$NEW_VERSION"; \
+	echo "✓ Bumped $$CURRENT_VERSION → $$NEW_VERSION"
 
 push-and-publish: git-push publish-release
 
@@ -343,7 +358,7 @@ deploy-bot:
 	echo "Directory: $$DIR_NAME"; \
 	echo "Monorepo root: $$MONOREPO_ROOT"; \
 	echo ""; \
-	$(MAKE) -C "$$MONOREPO_ROOT" deploy-bot BOT=$$DIR_NAME
+	$(MAKE) -C "$$MONOREPO_ROOT" deploy-bot BOT=$$DIR_NAME TARGET=mini
 
 verify-bot:
 	@MONOREPO_ROOT=$$($(call _FIND_MONOREPO_ROOT)) || { \
