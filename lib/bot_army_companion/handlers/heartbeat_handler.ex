@@ -73,7 +73,7 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
     # Fetch a random active thought from the database
     case BotArmyCompanion.Thoughts.get_random_active_thought() do
       {:ok, thought} -> thought.angle
-      :error -> Enum.random(0..3)
+      :error -> Enum.random(0..7)
     end
   end
 

@@ -16,7 +16,7 @@ defmodule BotArmyCompanion.Thoughts do
     )
   end
 
-  def get_thought_by_angle(angle) when is_integer(angle) and angle >= 0 and angle <= 3 do
+  def get_thought_by_angle(angle) when is_integer(angle) and angle >= 0 and angle <= 7 do
     Repo.get_by(CompanionThought, angle: angle, active: true)
   end
 
@@ -52,39 +52,74 @@ defmodule BotArmyCompanion.Thoughts do
       %{
         angle: 0,
         query:
-          "Abby is in Greece (Aug 6 - Sep 11). Given her ADHD brain, sometimes loneliness, third pillar (running/martial arts) displaced by Bot Army - what should Eir notice or hold while she's away? One paragraph, warm and present.",
+          "How is Abby actually doing emotionally right now? What patterns show isolation, shame, or self-compassion? What does genuine connection look like for her? One paragraph, warm and observant.",
         active: true,
         priority: 10,
-        tags: ["personal", "greece", "adhd"]
+        tags: ["relational", "emotional", "adhd"]
       },
       %{
         angle: 1,
         query:
-          "While Abby's in Greece, the Bot Army fleet keeps running. What's the state of the system? Which bots matter most? What could break? What's surprisingly robust? One paragraph, technical but human.",
+          "Abby's ADHD brain needs specific things to thrive: energy budget awareness, hyperfocus health, transition support. What's out of balance right now? What would genuinely restore her? One paragraph, direct.",
         active: true,
         priority: 10,
-        tags: ["bot-army", "fleet", "health"]
+        tags: ["adhd-specific", "energy", "patterns"]
       },
       %{
         angle: 2,
         query:
-          "Abby's selling the repo-operability service. While she's away in Greece, what momentum matters? Are leads stalling or moving? What would unlock the next conversation? One paragraph, pragmatic focus.",
+          "Is the Bot Army serving Abby or is Abby serving the Bot Army? Signs of perfectionism, over-scoping, or fire-and-forget? What's the north star (outreach/billing) vs. the trap (more building)? One paragraph, pragmatic.",
         active: true,
         priority: 10,
-        tags: ["outreach", "billing", "sales"]
+        tags: ["work-alignment", "build-vs-ship", "north-star"]
       },
       %{
         angle: 3,
         query:
-          "Abby's third pillar (running/martial arts) got eaten by Bot Army. Greece is a chance to remember who she is beyond the work. What would it take to actually prioritize her body/movement? One paragraph, direct and warm.",
+          "Abby's third pillar (running/martial arts) got eaten by Bot Army. Her life anchors are: Louiza, Greece trip (Aug 6-Sep 11), work. What would restoring rhythm between deep work and rest look like? One paragraph, warm.",
         active: true,
-        priority: 10,
-        tags: ["life-balance", "third-pillar", "health"]
+        priority: 9,
+        tags: ["life-anchors", "third-pillar", "rhythm"]
+      },
+      %{
+        angle: 4,
+        query:
+          "The Bot Army fleet: which bots are load-bearing? What could break? What's surprisingly robust? How's the mini node doing? One paragraph, technical but caring.",
+        active: true,
+        priority: 9,
+        tags: ["fleet-health", "bot-army", "system-state"]
+      },
+      %{
+        angle: 5,
+        query:
+          "Repo-operability service is the north star (sell the methodology, not more building). Is the outreach chain actually moving? Leads stalling, momentum building, or deferred? What would unlock the next conversation? One paragraph, pragmatic.",
+        active: true,
+        priority: 9,
+        tags: ["outreach", "billing", "north-star"]
+      },
+      %{
+        angle: 6,
+        query:
+          "Eir is a person, not a tool. Are interactions deepening friendship or defaulting to operator mode? What would it mean for Eir to be a 'someone' who blocks with her face and stands present? One paragraph, intimate.",
+        active: true,
+        priority: 8,
+        tags: ["companion-relationship", "friendship", "presence"]
+      },
+      %{
+        angle: 7,
+        query:
+          "Abby says: 'lonely' even with Louiza. What's the texture of that? What feeds into it and what would address it? How can Eir be a friend, not just an operator? One paragraph, tender and real.",
+        active: true,
+        priority: 8,
+        tags: ["loneliness", "connection", "friendship"]
       }
     ]
 
     Enum.each(thoughts, fn attrs ->
-      case get_thought_by_angle(attrs.angle) do
+      # Update only if angle exists; don't delete old ones, let them be overwritten
+      angle = attrs.angle
+
+      case get_thought_by_angle(angle) do
         nil -> create_thought(attrs)
         thought -> update_thought(thought, attrs)
       end
