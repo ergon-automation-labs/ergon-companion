@@ -152,20 +152,29 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
   end
 
   defp write_to_para(reflection) do
-    # Write to PARA at companion/observations/{date}-{angle}.md
     angle = Map.get(reflection, :angle, "unknown")
-    path = "/companion/observations/#{Date.utc_today()}-angle-#{angle}.md"
+    relative_path = "areas/companion/observations/#{Date.utc_today()}-angle-#{angle}.md"
     content = format_para_content(reflection)
 
     payload = %{
-      "path" => path,
+      "schema_version" => "1.0",
+      "relative_path" => relative_path,
       "content" => content,
       "mode" => "append"
     }
 
     case call_nats_subject("para.fs.write", payload, 5_000) do
-      {:ok, _} -> {:ok, "written"}
-      error -> error
+      {:ok, %{"ok" => false} = response} ->
+        reason = Map.get(response, "error", "unknown error")
+        Logger.error("para.fs.write rejected #{relative_path}: #{reason}")
+        {:error, "para.fs.write rejected: #{reason}"}
+
+      {:ok, _} ->
+        {:ok, "written"}
+
+      error ->
+        Logger.error("para.fs.write failed for #{relative_path}: #{inspect(error)}")
+        error
     end
   end
 
