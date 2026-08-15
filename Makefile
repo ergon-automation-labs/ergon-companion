@@ -65,7 +65,7 @@ init:
 deps:
 	$(MIX) deps.get
 
-compile:
+_compile-impl:
 	@LOG_FILE="/tmp/compile-companion-$$(date +%s).log"; \
 	echo "Compiling Companion and logging to $$LOG_FILE..."; \
 	$(MIX) compile 2>&1 | tee "$$LOG_FILE"; \
@@ -375,3 +375,12 @@ verify-bot-nats:
 	}; \
 	BOT_NAME=$$(basename $$(pwd) | sed 's/bot_army_//'); \
 	$(MAKE) -C "$$MONOREPO_ROOT" verify-bot-nats BOT=$$BOT_NAME
+
+# Shared targets (push, credo, pre-push-cleanup, bump-version, git-push).
+# Defined once in bot_army_infra so they cannot drift per repo.
+BOT_ARMY_COMMON_MK := $(abspath $(CURDIR)/../bot_army_infra/make/common.mk)
+ifeq ($(wildcard $(BOT_ARMY_COMMON_MK)),)
+$(warning bot_army_infra not found at $(BOT_ARMY_COMMON_MK) - shared targets unavailable)
+else
+include $(BOT_ARMY_COMMON_MK)
+endif
