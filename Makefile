@@ -1,7 +1,7 @@
 SCRIPTS_DIRECTORY ?= $(abspath $(CURDIR)/../scripts)
 MIX ?= /Users/abby/.local/share/mise/shims/mix
 
-.PHONY: setup help deps compile test test-handlers test-stores test-nats test-integration test-full credo dialyzer coverage check format clean release test-release-smoke publish-release setup-hooks setup-db reset-db logs git-push push pre-push-cleanup push-and-publish bump-version sync-release-version
+.PHONY: setup help deps compile test test-handlers test-stores test-nats test-integration test-full dialyzer coverage check format clean release test-release-smoke publish-release setup-hooks setup-db reset-db logs push-and-publish sync-release-version
 
 help:
 	@echo "Companion Bot"
@@ -92,13 +92,6 @@ test-integration:
 
 test-full:
 	$(MIX) test --include integration --include nats_live --trace
-
-credo:
-	@BOT_NAME=companion; \
-	LOG_FILE="/tmp/credo-$${BOT_NAME}-$$(date +%s).log"; \
-	echo "Running credo and logging to $$LOG_FILE..."; \
-	$(MIX) credo 2>&1 | tee "$$LOG_FILE"; \
-	echo "✓ Credo log: $$LOG_FILE"
 
 dialyzer: deps
 	$(MIX) dialyzer
@@ -203,59 +196,6 @@ publish-release: release
 	echo "1. If this bot's ci_engine is 'nats' (pillar/common.sls in bot_army_infra), deploy_pipeline_bot deploys it automatically."; \
 	echo "2. Otherwise: make deploy-bot, or wait for Jenkins polling"; \
 	echo "3. Check status: make jenkins-logs (Jenkins) or watch ops.deploy.* on NATS (deploy_pipeline_bot path)"
-
-pre-push-cleanup:
-	@echo "🧹 Cleaning up pre-push artifacts..."
-	@if git diff --quiet git-hooks/pre-push 2>/dev/null; then \
-		echo "✓ No hook changes"; \
-	else \
-		echo "📋 Staging hook changes..."; \
-		git add git-hooks/pre-push 2>/dev/null; \
-		git commit -m "chore: sync pre-push hook" || true; \
-	fi
-	@if git diff --quiet mix.lock 2>/dev/null; then \
-		echo "✓ No lock file changes"; \
-	else \
-		echo "📋 Staging lock file changes..."; \
-		git add mix.lock 2>/dev/null; \
-		git commit -m "chore: lock file updates from pre-push validation" || true; \
-	fi
-	@echo "✓ Ready to push"
-
-push: test compile credo pre-push-cleanup
-	@echo "✅ All validations passed"
-	@echo "$$(date +%s)" > .push-validated
-	@echo "✓ Proof-of-validation created"
-	@$(MAKE) git-push
-
-git-push: pre-push-cleanup
-	@BOT_NAME=companion; \
-	LOG_FILE="/tmp/git-push-$${BOT_NAME}-$$(date +%s).log"; \
-	echo "Pushing to origin/main and logging to $$LOG_FILE..."; \
-	git push 2>&1 | tee "$$LOG_FILE"; \
-	echo "✓ Log saved: $$LOG_FILE"
-
-bump-version:
-	@if [ -z "$(BUMP)" ]; then \
-		echo "Usage: make bump-version BUMP=major|minor|patch"; \
-		exit 1; \
-	fi
-	@CURRENT_VERSION=$$(sed -n 's/^[[:space:]]*version:[[:space:]]*"\([^"]*\)".*/\1/p' mix.exs | head -n 1); \
-	if [ -z "$$CURRENT_VERSION" ]; then \
-		echo "Failed to read current version from mix.exs"; \
-		exit 1; \
-	fi; \
-	IFS='.' read -r MAJOR MINOR PATCH <<< "$$CURRENT_VERSION"; \
-	case "$(BUMP)" in \
-		major) NEW_VERSION="$$((MAJOR + 1)).0.0" ;; \
-		minor) NEW_VERSION="$$MAJOR.$$((MINOR + 1)).0" ;; \
-		patch) NEW_VERSION="$$MAJOR.$$MINOR.$$((PATCH + 1))" ;; \
-		*) echo "Invalid BUMP: $(BUMP). Use major|minor|patch"; exit 1 ;; \
-	esac; \
-	sed -i '' "s/version: \"$$CURRENT_VERSION\"/version: \"$$NEW_VERSION\"/" mix.exs; \
-	git add mix.exs; \
-	git commit -m "chore: bump companion to $$NEW_VERSION"; \
-	echo "✓ Bumped $$CURRENT_VERSION → $$NEW_VERSION"
 
 push-and-publish: git-push publish-release
 

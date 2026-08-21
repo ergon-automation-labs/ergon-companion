@@ -27,20 +27,7 @@ defmodule BotArmyCompanion.Application do
 
     opts = [strategy: :one_for_one, name: BotArmyCompanion.Supervisor]
 
-    case Supervisor.start_link(children, opts) do
-      {:ok, pid} ->
-        seed_thoughts()
-        {:ok, pid}
-
-      error ->
-        error
-    end
-  end
-
-  defp seed_thoughts do
-    if @env != :test do
-      BotArmyCompanion.Thoughts.seed_default_thoughts()
-    end
+    Supervisor.start_link(children, opts)
   end
 
   defp maybe_add_repo(children) do
