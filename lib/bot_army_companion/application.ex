@@ -47,11 +47,17 @@ defmodule BotArmyCompanion.Application do
   end
 
   defp maybe_add_workers(children) do
-    if @env == :test do
+    if @env == :test or skip_workers?() do
       children
     else
       # NATS consumer for companion.heartbeat requests
       [{BotArmyCompanion.NATS.Consumer, []} | children]
     end
+  end
+
+  # Skip workers if running during database migrations (release.eval context)
+  # Set during Salt deployment: `export BOT_SKIP_WORKERS=true` before running migrations
+  defp skip_workers? do
+    System.get_env("BOT_SKIP_WORKERS") == "true"
   end
 end
