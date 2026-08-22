@@ -49,12 +49,22 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
   end
 
   defp execute_reflection do
+    Logger.debug("execute_reflection: Starting reflection cycle")
+
     with {:ok, state} <- gather_system_state(),
+         _ = Logger.debug("execute_reflection: gather_system_state returned: #{inspect(state)}"),
          {:ok, reflection} <- generate_reflection(state),
-         {:ok, _} <- write_to_para(reflection) do
+         _ =
+           Logger.debug(
+             "execute_reflection: generate_reflection returned: #{inspect(reflection)}"
+           ),
+         {:ok, _} <- write_to_para(reflection),
+         _ = Logger.debug("execute_reflection: write_to_para completed successfully") do
       {:ok, reflection}
     else
-      error -> error
+      error ->
+        Logger.error("execute_reflection: Failed with error: #{inspect(error)}")
+        error
     end
   end
 
@@ -78,14 +88,24 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
   end
 
   defp generate_reflection(%{angle: angle} = state) do
+    Logger.debug("generate_reflection: Starting for angle #{angle}")
+
     case get_reflection_query(angle) do
       {:ok, query} ->
+        Logger.debug("generate_reflection: Got query for angle #{angle}: #{inspect(query)}")
+
         case request_bridge_chat(query) do
-          {:ok, response} -> {:ok, Map.put(state, :reflection, response)}
-          error -> error
+          {:ok, response} ->
+            Logger.debug("generate_reflection: Got bridge.chat response: #{inspect(response)}")
+            {:ok, Map.put(state, :reflection, response)}
+
+          error ->
+            Logger.error("generate_reflection: bridge.chat failed: #{inspect(error)}")
+            error
         end
 
       :error ->
+        Logger.error("generate_reflection: No reflection query found for angle #{angle}")
         {:error, "No reflection query found for angle #{angle}"}
     end
   end
@@ -98,15 +118,25 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
   end
 
   defp request_bridge_chat(query) do
+    Logger.debug("request_bridge_chat: Starting with query: #{inspect(query)}")
+
     payload = %{
       "query" => query,
       "context_id" => "companion-heartbeat-#{System.os_time(:second)}"
     }
 
+    Logger.debug("request_bridge_chat: Payload: #{inspect(payload)}")
+
     case call_nats_subject("bridge.chat", payload, 10_000) do
       {:ok, response} ->
+        Logger.debug("request_bridge_chat: Got NATS response: #{inspect(response)}")
+
         case Map.get(response, "data") do
           %{"response" => text} ->
+            Logger.debug(
+              "request_bridge_chat: Extracted text response (#{String.length(text)} chars)"
+            )
+
             {:ok, text}
 
           _ ->
@@ -152,9 +182,15 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
   end
 
   defp write_to_para(reflection) do
+    Logger.debug("write_to_para: Starting with reflection: #{inspect(reflection)}")
+
     angle = Map.get(reflection, :angle, "unknown")
     relative_path = "areas/companion/observations/#{Date.utc_today()}-angle-#{angle}.md"
     content = format_para_content(reflection)
+
+    Logger.debug(
+      "write_to_para: Path=#{relative_path}, content_size=#{String.length(content)} bytes"
+    )
 
     payload = %{
       "schema_version" => "1.0",
@@ -163,13 +199,16 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
       "mode" => "append"
     }
 
+    Logger.debug("write_to_para: Sending payload to para.fs.write")
+
     case call_nats_subject("para.fs.write", payload, 5_000) do
       {:ok, %{"ok" => false} = response} ->
         reason = Map.get(response, "error", "unknown error")
         Logger.error("para.fs.write rejected #{relative_path}: #{reason}")
         {:error, "para.fs.write rejected: #{reason}"}
 
-      {:ok, _} ->
+      {:ok, response} ->
+        Logger.info("para.fs.write succeeded for #{relative_path}: #{inspect(response)}")
         {:ok, "written"}
 
       error ->
