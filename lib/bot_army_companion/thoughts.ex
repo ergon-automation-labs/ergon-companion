@@ -16,7 +16,7 @@ defmodule BotArmyCompanion.Thoughts do
     )
   end
 
-  def get_thought_by_angle(angle) when is_integer(angle) and angle >= 0 and angle <= 7 do
+  def get_thought_by_angle(angle) when is_integer(angle) and angle >= 0 and angle <= 10 do
     Repo.get_by(CompanionThought, angle: angle, active: true)
   end
 
@@ -112,6 +112,30 @@ defmodule BotArmyCompanion.Thoughts do
         active: true,
         priority: 8,
         tags: ["loneliness", "connection", "friendship"]
+      },
+      %{
+        angle: 8,
+        query:
+          "What's a recent win — a fix shipped, a fast diagnosis, an outreach reply, anything that actually happened — that hasn't been acknowledged? Celebrate the action taken, not the outcome. One paragraph, warm.",
+        active: true,
+        priority: 8,
+        tags: ["wins", "celebration", "adhd"]
+      },
+      %{
+        angle: 9,
+        query:
+          "Is Abby's trust in the Bot Army system growing or eroding right now? Is she fighting the same fire repeatedly, or genuinely making progress? What would rebuild confidence if it's slipping? One paragraph, honest.",
+        active: true,
+        priority: 8,
+        tags: ["trust", "reliability", "system-state"]
+      },
+      %{
+        angle: 10,
+        query:
+          "When did Abby last fully disconnect — not rest-shaped busywork, actual stopping? Is she protecting recovery time or pretending to? One paragraph, direct but kind.",
+        active: true,
+        priority: 8,
+        tags: ["rest", "boundaries", "adhd"]
       }
     ]
 
@@ -122,6 +146,31 @@ defmodule BotArmyCompanion.Thoughts do
       case get_thought_by_angle(angle) do
         nil -> create_thought(attrs)
         thought -> update_thought(thought, attrs)
+      end
+    end)
+  end
+
+  # Month-name-plus-day-number mentions in reflection query text (e.g. "Aug 6",
+  # "Sep 11") — a cheap, deterministic flag for hardcoded dates that are likely
+  # to go stale once the event they describe has passed. Not date-math (no
+  # attempt to parse ranges or compare to today) — just makes them findable.
+  @date_regex ~r/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}\b/i
+
+  @doc """
+  Scans active thought queries for hardcoded date-like text (e.g. "Aug 6-Sep
+  11") and returns the ones that mention any, so a stale reference (like a
+  trip that already ended) doesn't just sit there unnoticed. Returns
+  `[%{angle: integer, dates: [String.t()], query: String.t()}]`.
+  """
+  def audit_dates do
+    list_active_thoughts()
+    |> Enum.flat_map(fn thought ->
+      case Regex.scan(@date_regex, thought.query) do
+        [] ->
+          []
+
+        matches ->
+          [%{angle: thought.angle, dates: Enum.map(matches, &hd/1), query: thought.query}]
       end
     end)
   end

@@ -51,6 +51,8 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
   defp execute_reflection do
     Logger.debug("execute_reflection: Starting reflection cycle")
 
+    audit_stale_dates()
+
     with {:ok, state} <- gather_system_state(),
          {:ok, reflection} <- generate_reflection(state),
          {:ok, _} <- write_to_para(reflection) do
@@ -78,8 +80,57 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
     # Fetch a random active thought from the database
     case BotArmyCompanion.Thoughts.get_random_active_thought() do
       {:ok, thought} -> thought.angle
-      :error -> Enum.random(0..7)
+      :error -> Enum.random(0..10)
     end
+  end
+
+  # Deterministic, non-LLM check: flags hardcoded date mentions (e.g. "Aug
+  # 6-Sep 11") in active reflection thoughts so a stale reference doesn't sit
+  # unnoticed once the event it describes has passed. Best-effort — never
+  # blocks or fails the reflection cycle itself.
+  defp audit_stale_dates do
+    content = format_date_audit(BotArmyCompanion.Thoughts.audit_dates())
+
+    payload = %{
+      "schema_version" => "1.0",
+      "relative_path" => "areas/companion/observations/stale-dates.md",
+      "content" => content,
+      "mode" => "write"
+    }
+
+    case call_nats_subject("para.fs.write", payload, 5_000) do
+      {:ok, _} ->
+        :ok
+
+      error ->
+        Logger.warning("audit_stale_dates: para.fs.write failed (non-fatal): #{inspect(error)}")
+    end
+  rescue
+    e -> Logger.warning("audit_stale_dates: failed (non-fatal): #{inspect(e)}")
+  end
+
+  defp format_date_audit([]) do
+    """
+    ## Date audit — #{DateTime.utc_now() |> DateTime.to_iso8601()}
+
+    No hardcoded dates found in active reflection thoughts.
+    """
+  end
+
+  defp format_date_audit(flagged) do
+    lines =
+      Enum.map(flagged, fn %{angle: angle, dates: dates} ->
+        "- angle #{angle}: #{Enum.join(dates, ", ")}"
+      end)
+
+    """
+    ## Date audit — #{DateTime.utc_now() |> DateTime.to_iso8601()}
+
+    Hardcoded dates found in active reflection thought seeds — verify still current
+    (bot_army_companion/lib/bot_army_companion/thoughts.ex, seed_default_thoughts/0):
+
+    #{Enum.join(lines, "\n")}
+    """
   end
 
   defp generate_reflection(%{angle: angle} = state) do
