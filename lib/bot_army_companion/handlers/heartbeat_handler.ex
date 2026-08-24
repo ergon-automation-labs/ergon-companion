@@ -166,7 +166,7 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
 
     Logger.debug("request_bridge_chat: Payload: #{inspect(payload)}")
 
-    case call_nats_subject("bridge.chat", payload, 10_000) do
+    case call_nats_subject("bridge.chat", payload, 35_000) do
       {:ok, response} ->
         Logger.debug("request_bridge_chat: Got NATS response: #{inspect(response)}")
 
