@@ -77,10 +77,11 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
   end
 
   defp get_reflection_angle do
-    # Fetch a random active thought from the database
+    # Fetch a random active thought from the database.
+    # Fallback to angle 0 (guaranteed to exist from seed) if database query fails.
     case BotArmyCompanion.Thoughts.get_random_active_thought() do
       {:ok, thought} -> thought.angle
-      :error -> Enum.random(0..10)
+      :error -> 0
     end
   end
 

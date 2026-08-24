@@ -16,7 +16,7 @@ defmodule BotArmyCompanion.Thoughts do
     )
   end
 
-  def get_thought_by_angle(angle) when is_integer(angle) and angle >= 0 and angle <= 10 do
+  def get_thought_by_angle(angle) do
     Repo.get_by(CompanionThought, angle: angle, active: true)
   end
 
@@ -112,30 +112,6 @@ defmodule BotArmyCompanion.Thoughts do
         active: true,
         priority: 8,
         tags: ["loneliness", "connection", "friendship"]
-      },
-      %{
-        angle: 8,
-        query:
-          "What's a recent win — a fix shipped, a fast diagnosis, an outreach reply, anything that actually happened — that hasn't been acknowledged? Celebrate the action taken, not the outcome. One paragraph, warm.",
-        active: true,
-        priority: 8,
-        tags: ["wins", "celebration", "adhd"]
-      },
-      %{
-        angle: 9,
-        query:
-          "Is Abby's trust in the Bot Army system growing or eroding right now? Is she fighting the same fire repeatedly, or genuinely making progress? What would rebuild confidence if it's slipping? One paragraph, honest.",
-        active: true,
-        priority: 8,
-        tags: ["trust", "reliability", "system-state"]
-      },
-      %{
-        angle: 10,
-        query:
-          "When did Abby last fully disconnect — not rest-shaped busywork, actual stopping? Is she protecting recovery time or pretending to? One paragraph, direct but kind.",
-        active: true,
-        priority: 8,
-        tags: ["rest", "boundaries", "adhd"]
       }
     ]
 

@@ -2,9 +2,13 @@ defmodule BotArmyCompanion.Release do
   @moduledoc """
   Release tasks for the Companion bot.
 
-  Migrations are run via the shared BotArmyLibraryRuntime.Ecto.MigrationRunner:
+  Migrations and seed data are run via the shared BotArmyLibraryRuntime.Ecto.MigrationRunner:
 
       /path/to/companion_bot/bin/companion_bot eval 'BotArmyCompanion.Release.migrate()'
+
+  This calls:
+  1. All Ecto migrations (from runtime and companion app)
+  2. seed_default_thoughts/0 to populate companion_thoughts table
 
   Called from Salt during bot deployment, before the bot starts.
   """
@@ -18,6 +22,12 @@ defmodule BotArmyCompanion.Release do
       repo_module: BotArmyCompanion.Repo,
       app_module: @app
     )
+
+    # Seed default companion_thoughts after migrations complete.
+    # This ensures both schema changes and seed data run through the same
+    # hard-gated path (deployment blocks if either fails) rather than the
+    # optional Salt cmd.run step that only warns and continues.
+    seed()
   end
 
   @doc """
