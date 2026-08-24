@@ -18,7 +18,7 @@ defmodule BotArmyCompanion.Repo.Migrations.SeedReflectionAnglesWinsTrustRest do
   """
 
   def up do
-    now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+    now = DateTime.utc_now()
 
     thoughts = [
       {
@@ -45,11 +45,11 @@ defmodule BotArmyCompanion.Repo.Migrations.SeedReflectionAnglesWinsTrustRest do
       repo().query!(
         """
         INSERT INTO companion_thoughts (id, angle, query, active, priority, tags, inserted_at, updated_at)
-        VALUES ($1, $2, $3, true, $4, $5, $6, $6)
+        VALUES ($1, $2, $3, true, $4, $5, $6, $7)
         ON CONFLICT (angle) DO UPDATE
           SET query = EXCLUDED.query, priority = EXCLUDED.priority, tags = EXCLUDED.tags, updated_at = EXCLUDED.updated_at
         """,
-        [Ecto.UUID.generate(), angle, query, priority, tags, now]
+        [Ecto.UUID.generate(), angle, query, priority, tags, now, now]
       )
     end)
   end
