@@ -94,20 +94,73 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
       {:ok, query} ->
         Logger.debug("generate_reflection: Got query for angle #{angle}: #{inspect(query)}")
 
-        case request_bridge_chat(query) do
-          {:ok, response} ->
-            Logger.debug("generate_reflection: Got bridge.chat response: #{inspect(response)}")
-            {:ok, Map.put(state, :reflection, response)}
+        # Fetch prior reflection context to help Companion notice loops and patterns
+        case BotArmyCompanion.ReflectionHistory.summarize_prior_reflections(angle, 5) do
+          {:ok, history} ->
+            # Enhance the query with prior context
+            enhanced_query = enhance_query_with_history(query, history)
 
-          error ->
-            Logger.error("generate_reflection: bridge.chat failed: #{inspect(error)}")
-            error
+            Logger.debug(
+              "generate_reflection: Enhanced query with #{history.count} prior reflections"
+            )
+
+            case request_bridge_chat(enhanced_query) do
+              {:ok, response} ->
+                Logger.debug(
+                  "generate_reflection: Got bridge.chat response: #{inspect(response)}"
+                )
+
+                {:ok, Map.put(state, :reflection, response)}
+
+              error ->
+                Logger.error("generate_reflection: bridge.chat failed: #{inspect(error)}")
+                error
+            end
+
+          {:error, reason} ->
+            Logger.warning(
+              "generate_reflection: Could not fetch history (non-fatal): #{inspect(reason)}"
+            )
+
+            # Graceful degradation: proceed with original query if history fetch fails
+            case request_bridge_chat(query) do
+              {:ok, response} ->
+                Logger.debug(
+                  "generate_reflection: Got bridge.chat response: #{inspect(response)}"
+                )
+
+                {:ok, Map.put(state, :reflection, response)}
+
+              error ->
+                Logger.error("generate_reflection: bridge.chat failed: #{inspect(error)}")
+                error
+            end
         end
 
       :error ->
         Logger.error("generate_reflection: No reflection query found for angle #{angle}")
         {:error, "No reflection query found for angle #{angle}"}
     end
+  end
+
+  defp enhance_query_with_history(query, %{count: 0}) do
+    # No prior reflections, use original query
+    query
+  end
+
+  defp enhance_query_with_history(query, %{context: context_text, count: _count})
+       when byte_size(context_text) > 0 do
+    # Inject prior context into the query
+    """
+    #{query}
+
+    Context from prior reflections: #{context_text}
+    """
+  end
+
+  defp enhance_query_with_history(query, _history) do
+    # Fallback: use original query
+    query
   end
 
   defp get_reflection_query(angle) do

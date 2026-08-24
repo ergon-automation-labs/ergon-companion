@@ -50,8 +50,19 @@ defmodule BotArmyCompanion.Application do
     if @env == :test or skip_workers?() do
       children
     else
-      # NATS consumer for companion.heartbeat requests
-      [{BotArmyCompanion.NATS.Consumer, []} | children]
+      [
+        # Leader/standby election for dual-node (air + mini) deployment — must
+        # start before the consumer so its first on_role_change call lands
+        # while the consumer is still connecting (not yet subscribed either way).
+        {BotArmyLibraryRuntime.LeaderElection,
+         service: "companion",
+         node_name: System.get_env("LEADER_NODE_NAME", "unknown"),
+         default_role: BotArmyLibraryRuntime.LeaderElection.role_from_env("COMPANION_NODE_ROLE"),
+         on_role_change: {BotArmyCompanion.NATS.Consumer, :leader_role_changed, []}},
+        # NATS consumer for companion.heartbeat requests
+        {BotArmyCompanion.NATS.Consumer, []}
+        | children
+      ]
     end
   end
 

@@ -36,7 +36,10 @@ defmodule BotArmyCompanion.NATS.Consumer do
     state = %{
       subscriptions: [],
       conn: nil,
-      opts: opts
+      opts: opts,
+      # LeaderElection announces the real role shortly after startup; defaulting
+      # to standby means a not-yet-elected node never answers business traffic.
+      role: :standby
     }
 
     {:ok, state, {:continue, :connect}}
@@ -57,19 +60,70 @@ defmodule BotArmyCompanion.NATS.Consumer do
 
   defp handle_nats_connected(conn, state) do
     BotArmyLibraryRuntime.NATS.Connection.subscribe_to_status()
+    state = %{state | conn: conn}
+
+    if state.role == :primary do
+      subscribe_business_subjects(state)
+    else
+      Logger.info("Companion consumer standby — not subscribing to business subjects")
+      {:noreply, register_with_role(%{state | subscriptions: []})}
+    end
+  end
+
+  defp subscribe_business_subjects(state) do
     Logger.info("Connected to NATS, subscribing to topics")
 
     subscriptions =
       [
         "companion.heartbeat"
       ]
-      |> Enum.map(&subscribe_to_subject(conn, &1))
+      |> Enum.map(&subscribe_to_subject(state.conn, &1))
       |> Enum.filter(&(not is_nil(&1)))
 
-    # Register subjects for runtime discovery
-    BotArmyLibraryRuntime.Registry.register("companion", @subjects, @version)
+    {:noreply, register_with_role(%{state | subscriptions: subscriptions})}
+  end
 
-    {:noreply, %{state | subscriptions: subscriptions, conn: conn}}
+  @doc """
+  Called by `BotArmyLibraryRuntime.LeaderElection`'s `on_role_change` callback.
+  """
+  def leader_role_changed(role) when role in [:primary, :standby] do
+    GenServer.cast(__MODULE__, {:leader_role_changed, role})
+  end
+
+  @impl true
+  def handle_cast({:leader_role_changed, :primary}, %{conn: nil} = state) do
+    Logger.warning(
+      "Companion consumer designated PRIMARY, but NATS not connected yet — will subscribe once connected"
+    )
+
+    {:noreply, %{state | role: :primary}}
+  end
+
+  def handle_cast({:leader_role_changed, :primary}, %{subscriptions: []} = state) do
+    Logger.warning("Companion consumer becoming PRIMARY — subscribing to business subjects")
+    subscribe_business_subjects(%{state | role: :primary})
+  end
+
+  def handle_cast({:leader_role_changed, :primary}, state) do
+    {:noreply, %{state | role: :primary}}
+  end
+
+  def handle_cast({:leader_role_changed, :standby}, state) do
+    Logger.warning("Companion consumer becoming STANDBY — unsubscribing from business subjects")
+
+    if state.conn do
+      Enum.each(state.subscriptions, &Gnat.unsub(state.conn, &1))
+    end
+
+    {:noreply, register_with_role(%{state | role: :standby, subscriptions: []})}
+  end
+
+  # Registers with the fleet Registry, reflecting the current role in
+  # deployment_status so a standby node is visible but clearly not serving.
+  defp register_with_role(state) do
+    deployment_status = if state.role == :primary, do: "deployed", else: "standby"
+    BotArmyLibraryRuntime.Registry.register("companion", @subjects, @version, deployment_status)
+    state
   end
 
   defp subscribe_to_subject(conn, subject) do
