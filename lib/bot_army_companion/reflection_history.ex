@@ -25,7 +25,7 @@ defmodule BotArmyCompanion.ReflectionHistory do
 
     # Fetch prior reflections from PARA
     case fetch_reflections_for_angle(angle) do
-      {:ok, reflections} when is_list(reflections) and length(reflections) > 0 ->
+      {:ok, [_ | _] = reflections} ->
         Logger.debug(
           "ReflectionHistory: Found #{length(reflections)} prior reflections for angle #{angle}"
         )

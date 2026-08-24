@@ -52,14 +52,9 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
     Logger.debug("execute_reflection: Starting reflection cycle")
 
     with {:ok, state} <- gather_system_state(),
-         _ = Logger.debug("execute_reflection: gather_system_state returned: #{inspect(state)}"),
          {:ok, reflection} <- generate_reflection(state),
-         _ =
-           Logger.debug(
-             "execute_reflection: generate_reflection returned: #{inspect(reflection)}"
-           ),
-         {:ok, _} <- write_to_para(reflection),
-         _ = Logger.debug("execute_reflection: write_to_para completed successfully") do
+         {:ok, _} <- write_to_para(reflection) do
+      Logger.debug("execute_reflection: All steps completed successfully")
       {:ok, reflection}
     else
       error ->
@@ -92,54 +87,45 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
 
     case get_reflection_query(angle) do
       {:ok, query} ->
-        Logger.debug("generate_reflection: Got query for angle #{angle}: #{inspect(query)}")
-
-        # Fetch prior reflection context to help Companion notice loops and patterns
-        case BotArmyCompanion.ReflectionHistory.summarize_prior_reflections(angle, 5) do
-          {:ok, history} ->
-            # Enhance the query with prior context
-            enhanced_query = enhance_query_with_history(query, history)
-
-            Logger.debug(
-              "generate_reflection: Enhanced query with #{history.count} prior reflections"
-            )
-
-            case request_bridge_chat(enhanced_query) do
-              {:ok, response} ->
-                Logger.debug(
-                  "generate_reflection: Got bridge.chat response: #{inspect(response)}"
-                )
-
-                {:ok, Map.put(state, :reflection, response)}
-
-              error ->
-                Logger.error("generate_reflection: bridge.chat failed: #{inspect(error)}")
-                error
-            end
-
-          {:error, reason} ->
-            Logger.warning(
-              "generate_reflection: Could not fetch history (non-fatal): #{inspect(reason)}"
-            )
-
-            # Graceful degradation: proceed with original query if history fetch fails
-            case request_bridge_chat(query) do
-              {:ok, response} ->
-                Logger.debug(
-                  "generate_reflection: Got bridge.chat response: #{inspect(response)}"
-                )
-
-                {:ok, Map.put(state, :reflection, response)}
-
-              error ->
-                Logger.error("generate_reflection: bridge.chat failed: #{inspect(error)}")
-                error
-            end
-        end
+        Logger.debug("generate_reflection: Got query for angle #{angle}")
+        generate_reflection_with_query(state, query, angle)
 
       :error ->
         Logger.error("generate_reflection: No reflection query found for angle #{angle}")
         {:error, "No reflection query found for angle #{angle}"}
+    end
+  end
+
+  defp generate_reflection_with_query(state, query, angle) do
+    case BotArmyCompanion.ReflectionHistory.summarize_prior_reflections(angle, 5) do
+      {:ok, history} ->
+        enhanced_query = enhance_query_with_history(query, history)
+
+        Logger.debug(
+          "generate_reflection: Enhanced query with #{history.count} prior reflections"
+        )
+
+        generate_reflection_from_query(state, enhanced_query)
+
+      {:error, reason} ->
+        Logger.warning(
+          "generate_reflection: Could not fetch history (non-fatal): #{inspect(reason)}"
+        )
+
+        # Graceful degradation: proceed with original query if history fetch fails
+        generate_reflection_from_query(state, query)
+    end
+  end
+
+  defp generate_reflection_from_query(state, query) do
+    case request_bridge_chat(query) do
+      {:ok, response} ->
+        Logger.debug("generate_reflection: Got bridge.chat response")
+        {:ok, Map.put(state, :reflection, response)}
+
+      error ->
+        Logger.error("generate_reflection: bridge.chat failed: #{inspect(error)}")
+        error
     end
   end
 

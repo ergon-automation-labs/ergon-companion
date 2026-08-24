@@ -1,6 +1,5 @@
 defmodule BotArmyCompanion.ParaClientTest do
   use ExUnit.Case
-  alias BotArmyCompanion.ParaClient
 
   describe "parse_reflection_filename" do
     test "parses valid reflection filenames" do
