@@ -22,6 +22,21 @@ defmodule BotArmyCompanion.NATS.Consumer do
       subject: "companion.heartbeat",
       type: :request_reply,
       description: "Companion heartbeat - reflect on context and system state"
+    },
+    %{
+      subject: "companion.observations.list",
+      type: :request_reply,
+      description: "List recent PARA observations (reflections), newest first"
+    },
+    %{
+      subject: "companion.observations.read",
+      type: :request_reply,
+      description: "Read one observation's full content by filename"
+    },
+    %{
+      subject: "companion.observations.reply",
+      type: :request_reply,
+      description: "Append Abby's reply to an observation"
     }
   ]
 
@@ -75,7 +90,10 @@ defmodule BotArmyCompanion.NATS.Consumer do
 
     subscriptions =
       [
-        "companion.heartbeat"
+        "companion.heartbeat",
+        "companion.observations.list",
+        "companion.observations.read",
+        "companion.observations.reply"
       ]
       |> Enum.map(&subscribe_to_subject(state.conn, &1))
       |> Enum.filter(&(not is_nil(&1)))
@@ -166,6 +184,15 @@ defmodule BotArmyCompanion.NATS.Consumer do
       "companion.heartbeat" ->
         handle_heartbeat_request(msg)
 
+      "companion.observations.list" ->
+        handle_observations_list_request(msg)
+
+      "companion.observations.read" ->
+        handle_observations_read_request(msg)
+
+      "companion.observations.reply" ->
+        handle_observations_reply_request(msg)
+
       _ ->
         Logger.debug("Unknown request/reply subject: #{msg.topic}")
     end
@@ -193,6 +220,92 @@ defmodule BotArmyCompanion.NATS.Consumer do
   rescue
     e ->
       Logger.error("Error handling companion.heartbeat request: #{inspect(e)}")
+  end
+
+  defp handle_observations_list_request(msg) do
+    limit = decode_body(msg.body) |> Map.get("limit", 20)
+
+    response =
+      case BotArmyCompanion.Handlers.ObservationsHandler.list_observations(limit) do
+        {:ok, observations} ->
+          BotArmyLibraryRuntime.NATS.Reply.ok(%{"observations" => observations})
+
+        {:error, reason} ->
+          BotArmyLibraryRuntime.NATS.Reply.error(inspect(reason), :list_failed)
+      end
+
+    reply(msg, response)
+  rescue
+    e ->
+      Logger.error("Error handling companion.observations.list request: #{inspect(e)}")
+  end
+
+  defp handle_observations_read_request(msg) do
+    body = decode_body(msg.body)
+
+    response =
+      case Map.get(body, "filename") do
+        filename when is_binary(filename) ->
+          case BotArmyCompanion.Handlers.ObservationsHandler.read_observation(filename) do
+            {:ok, content} ->
+              BotArmyLibraryRuntime.NATS.Reply.ok(%{"filename" => filename, "content" => content})
+
+            {:error, reason} ->
+              BotArmyLibraryRuntime.NATS.Reply.error(inspect(reason), :read_failed)
+          end
+
+        _ ->
+          BotArmyLibraryRuntime.NATS.Reply.error("Missing 'filename'", :bad_request)
+      end
+
+    reply(msg, response)
+  rescue
+    e ->
+      Logger.error("Error handling companion.observations.read request: #{inspect(e)}")
+  end
+
+  defp handle_observations_reply_request(msg) do
+    body = decode_body(msg.body)
+    filename = Map.get(body, "filename")
+    reply_text = Map.get(body, "reply")
+
+    response =
+      case BotArmyCompanion.Handlers.ObservationsHandler.reply_to_observation(
+             filename,
+             reply_text
+           ) do
+        {:ok, _} ->
+          BotArmyLibraryRuntime.NATS.Reply.ok(%{"filename" => filename})
+
+        {:error, reason} ->
+          BotArmyLibraryRuntime.NATS.Reply.error(inspect(reason), :reply_failed)
+      end
+
+    reply(msg, response)
+  rescue
+    e ->
+      Logger.error("Error handling companion.observations.reply request: #{inspect(e)}")
+  end
+
+  defp decode_body(""), do: %{}
+
+  defp decode_body(body) do
+    case Jason.decode(body) do
+      {:ok, decoded} -> decoded
+      {:error, _} -> %{}
+    end
+  end
+
+  defp reply(msg, response) do
+    case GenServer.call(BotArmyLibraryRuntime.NATS.Connection, :get_connection, 5000) do
+      {:ok, conn} ->
+        Gnat.pub(conn, msg.reply_to, response)
+
+      {:error, reason} ->
+        Logger.warning(
+          "Failed to get NATS connection to reply to #{msg.topic}: #{inspect(reason)}"
+        )
+    end
   end
 
   @impl true

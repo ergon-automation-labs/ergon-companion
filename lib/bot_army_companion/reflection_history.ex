@@ -40,9 +40,21 @@ defmodule BotArmyCompanion.ReflectionHistory do
         oldest_date = List.last(dates)
         newest_date = List.first(dates)
 
+        # Read file content for the most recent reflection to check whether
+        # Abby replied to it — that's what actually makes this a conversation
+        # rather than a monologue.
+        latest_reply = fetch_latest_reply(recent)
+
         # Build context for injection into prompt
         context =
-          build_context_summary(themes, blockers, oldest_date, newest_date, length(recent))
+          build_context_summary(
+            themes,
+            blockers,
+            oldest_date,
+            newest_date,
+            length(recent),
+            latest_reply
+          )
 
         {:ok,
          %{
@@ -103,6 +115,32 @@ defmodule BotArmyCompanion.ReflectionHistory do
     end
   end
 
+  # Read the most recent reflection's file content and pull out the latest
+  # "## Abby's reply — ..." section, if any. This is the one piece of real
+  # content this module reads — everything else here is filename metadata.
+  defp fetch_latest_reply([]), do: nil
+
+  defp fetch_latest_reply([%{filename: filename} | _rest]) do
+    path = "areas/companion/observations/#{filename}"
+
+    case ParaClient.read_file(path) do
+      {:ok, content} -> extract_latest_reply_section(content)
+      _ -> nil
+    end
+  end
+
+  defp extract_latest_reply_section(content) do
+    matches = Regex.scan(~r/## Abby's reply.*?\n\n(.*?)\n\n/s, content)
+
+    case List.last(matches) do
+      [_full, reply_text] ->
+        reply_text |> String.trim()
+
+      _ ->
+        nil
+    end
+  end
+
   # Parse a reflection filename like "2026-08-24-angle-3.md"
   defp parse_reflection_filename(filename) do
     case Regex.run(~r/(\d{4}-\d{2}-\d{2})-angle-(\d+)/, filename) do
@@ -140,34 +178,39 @@ defmodule BotArmyCompanion.ReflectionHistory do
   end
 
   # Build a natural language summary for prompt injection
-  defp build_context_summary(themes, blockers, oldest_date, newest_date, count) do
-    case count do
-      0 ->
-        ""
-
-      1 ->
-        "This is the first reflection on this angle."
-
-      2 ->
-        "You've reflected on this angle twice: #{oldest_date} and #{newest_date}."
-
-      n ->
-        base =
-          "You've been thinking about this for #{n} cycles (#{oldest_date} to #{newest_date})"
-
-        themes_text =
-          case themes do
-            [] -> ""
-            t -> ". Patterns noticed: #{Enum.join(t, ", ")}."
-          end
-
-        blockers_text =
-          case blockers do
-            [] -> ""
-            b -> " Blockers: #{Enum.join(b, ", ")}."
-          end
-
-        base <> themes_text <> blockers_text
-    end
+  defp build_context_summary(themes, blockers, oldest_date, newest_date, count, latest_reply) do
+    base_text(count, oldest_date, newest_date) <>
+      themes_text(count, themes) <>
+      blockers_text(count, blockers) <>
+      reply_context_text(latest_reply)
   end
+
+  defp base_text(0, _oldest_date, _newest_date), do: ""
+  defp base_text(1, _oldest_date, _newest_date), do: "This is the first reflection on this angle."
+
+  defp base_text(2, oldest_date, newest_date),
+    do: "You've reflected on this angle twice: #{oldest_date} and #{newest_date}."
+
+  defp base_text(n, oldest_date, newest_date),
+    do: "You've been thinking about this for #{n} cycles (#{oldest_date} to #{newest_date})"
+
+  defp themes_text(count, _themes) when count < 3, do: ""
+  defp themes_text(_count, []), do: ""
+  defp themes_text(_count, themes), do: ". Patterns noticed: #{Enum.join(themes, ", ")}."
+
+  defp blockers_text(count, _blockers) when count < 3, do: ""
+  defp blockers_text(_count, []), do: ""
+  defp blockers_text(_count, blockers), do: " Blockers: #{Enum.join(blockers, ", ")}."
+
+  defp reply_context_text(nil), do: ""
+
+  defp reply_context_text(reply) do
+    " Abby replied to your last reflection on this: \"#{truncate(reply, 500)}\" — respond to that directly, don't just repeat yourself."
+  end
+
+  defp truncate(text, max_len) when byte_size(text) > max_len do
+    String.slice(text, 0, max_len) <> "…"
+  end
+
+  defp truncate(text, _max_len), do: text
 end
