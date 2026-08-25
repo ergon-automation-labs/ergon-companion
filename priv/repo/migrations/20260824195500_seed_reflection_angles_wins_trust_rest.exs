@@ -20,49 +20,43 @@ defmodule BotArmyCompanion.Repo.Migrations.SeedReflectionAnglesWinsTrustRest do
   def up do
     now = DateTime.utc_now()
 
-    id1 = Ecto.UUID.string_to_binary(Ecto.UUID.generate())
-    id2 = Ecto.UUID.string_to_binary(Ecto.UUID.generate())
-    id3 = Ecto.UUID.string_to_binary(Ecto.UUID.generate())
-
     rows = [
-      %{
-        id: id1,
-        angle: 8,
-        query:
-          "What's a recent win — a fix shipped, a fast diagnosis, an outreach reply, anything that actually happened — that hasn't been acknowledged? Celebrate the action taken, not the outcome. One paragraph, warm.",
-        active: true,
-        priority: 8,
-        tags: ["wins", "celebration", "adhd"],
-        inserted_at: now,
-        updated_at: now
+      {
+        Ecto.UUID.generate(),
+        8,
+        "What's a recent win — a fix shipped, a fast diagnosis, an outreach reply, anything that actually happened — that hasn't been acknowledged? Celebrate the action taken, not the outcome. One paragraph, warm.",
+        true,
+        8,
+        ["wins", "celebration", "adhd"],
+        now,
+        now
       },
-      %{
-        id: id2,
-        angle: 9,
-        query:
-          "Is Abby's trust in the Bot Army system growing or eroding right now? Is she fighting the same fire repeatedly, or genuinely making progress? What would rebuild confidence if it's slipping? One paragraph, honest.",
-        active: true,
-        priority: 8,
-        tags: ["trust", "reliability", "system-state"],
-        inserted_at: now,
-        updated_at: now
+      {
+        Ecto.UUID.generate(),
+        9,
+        "Is Abby's trust in the Bot Army system growing or eroding right now? Is she fighting the same fire repeatedly, or genuinely making progress? What would rebuild confidence if it's slipping? One paragraph, honest.",
+        true,
+        8,
+        ["trust", "reliability", "system-state"],
+        now,
+        now
       },
-      %{
-        id: id3,
-        angle: 10,
-        query:
-          "When did Abby last fully disconnect — not rest-shaped busywork, actual stopping? Is she protecting recovery time or pretending to? One paragraph, direct but kind.",
-        active: true,
-        priority: 8,
-        tags: ["rest", "boundaries", "adhd"],
-        inserted_at: now,
-        updated_at: now
+      {
+        Ecto.UUID.generate(),
+        10,
+        "When did Abby last fully disconnect — not rest-shaped busywork, actual stopping? Is she protecting recovery time or pretending to? One paragraph, direct but kind.",
+        true,
+        8,
+        ["rest", "boundaries", "adhd"],
+        now,
+        now
       }
     ]
 
     repo().insert_all(
       "companion_thoughts",
       rows,
+      columns: [:id, :angle, :query, :active, :priority, :tags, :inserted_at, :updated_at],
       on_conflict: {:replace, [:query, :priority, :tags, :updated_at]},
       conflict_target: :angle
     )
