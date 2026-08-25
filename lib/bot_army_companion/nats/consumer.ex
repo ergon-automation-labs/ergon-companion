@@ -199,18 +199,31 @@ defmodule BotArmyCompanion.NATS.Consumer do
   end
 
   defp handle_heartbeat_request(msg) do
+    Logger.info("DEBUG: handle_heartbeat_request called, reply_to=#{msg.reply_to}")
+
     response =
       case BotArmyCompanion.Handlers.HeartbeatHandler.handle_heartbeat(msg.body) do
         {:reply, %{ok: true, data: data}} ->
           BotArmyLibraryRuntime.NATS.Reply.ok(data)
 
-        {:reply, %{ok: false, error: reason}} ->
-          BotArmyLibraryRuntime.NATS.Reply.error(reason, :heartbeat_failed)
+        {:reply, %{ok: false, data: data, error: reason}} ->
+          # Handler includes both data (status/duration) and error message
+          BotArmyLibraryRuntime.NATS.Reply.error(
+            %{"data" => data, "error" => reason},
+            :heartbeat_failed
+          )
+
+        {:reply, result} ->
+          # Fallback for any other reply format
+          Logger.warning("Unexpected heartbeat handler response format: #{inspect(result)}")
+          BotArmyLibraryRuntime.NATS.Reply.error("Unexpected response format", :internal_error)
       end
 
     case GenServer.call(BotArmyLibraryRuntime.NATS.Connection, :get_connection, 5000) do
       {:ok, conn} ->
-        Gnat.pub(conn, msg.reply_to, response)
+        # Response needs to be JSON-encoded before sending via Gnat.pub
+        encoded_response = Jason.encode!(response)
+        Gnat.pub(conn, msg.reply_to, encoded_response)
 
       {:error, reason} ->
         Logger.warning(

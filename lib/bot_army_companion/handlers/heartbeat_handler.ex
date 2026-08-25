@@ -222,13 +222,20 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
       {:ok, response} ->
         Logger.debug("request_bridge_chat: Got NATS response: #{inspect(response)}")
 
-        case Map.get(response, "data") do
-          %{"response" => text} ->
+        # Handle both sync (direct response) and async (job_id) responses
+        case response do
+          %{"data" => %{"response" => text}} ->
+            # Synchronous response (legacy)
             Logger.debug(
               "request_bridge_chat: Extracted text response (#{String.length(text)} chars)"
             )
 
             {:ok, text}
+
+          %{"job_id" => job_id, "status" => "accepted"} ->
+            # Asynchronous response - poll for results
+            Logger.debug("request_bridge_chat: Got async job_id=#{job_id}, polling for results")
+            poll_job_result(job_id, 0, 60)
 
           _ ->
             Logger.error("bridge.chat unexpected response shape: #{inspect(response)}")
@@ -239,6 +246,56 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
         Logger.error("bridge.chat call_nats_subject error: #{inspect(error)}")
         error
     end
+  end
+
+  # Poll for job completion (up to 60 seconds, checking every second)
+  defp poll_job_result(_job_id, attempt, max_attempts) when attempt >= max_attempts do
+    Logger.error("poll_job_result: Timeout waiting for job after #{max_attempts}s")
+    {:error, "Job timeout: LLM response took too long"}
+  end
+
+  defp poll_job_result(job_id, attempt, max_attempts) do
+    # Wait 1 second before polling (except on first attempt)
+    if attempt > 0 do
+      Process.sleep(1000)
+    end
+
+    payload = %{"job_id" => job_id}
+
+    case call_nats_subject("bridge.job.status", payload, 5_000) do
+      {:ok, %{"ok" => true, "status" => "completed", "result" => result}} ->
+        Logger.debug("poll_job_result: Job completed after #{attempt + 1}s")
+        extract_result_text(result)
+
+      {:ok, %{"ok" => false, "error" => error}} ->
+        Logger.error("poll_job_result: Job error: #{error}")
+        {:error, "Job failed: #{error}"}
+
+      {:ok, %{"status" => "pending"}} ->
+        Logger.debug(
+          "poll_job_result: Job still pending (attempt #{attempt + 1}/#{max_attempts})"
+        )
+
+        poll_job_result(job_id, attempt + 1, max_attempts)
+
+      error ->
+        Logger.error("poll_job_result: Status check error: #{inspect(error)}")
+        # Retry on error
+        poll_job_result(job_id, attempt + 1, max_attempts)
+    end
+  end
+
+  # Extract text from various result formats
+  defp extract_result_text(%{"response" => text}) when is_binary(text), do: {:ok, text}
+
+  defp extract_result_text(%{"data" => %{"response" => text}}) when is_binary(text),
+    do: {:ok, text}
+
+  defp extract_result_text(text) when is_binary(text), do: {:ok, text}
+
+  defp extract_result_text(result) do
+    Logger.error("extract_result_text: Unexpected result format: #{inspect(result)}")
+    {:error, "Invalid result format from job"}
   end
 
   defp call_nats_subject(subject, payload, timeout_ms) do
@@ -315,9 +372,13 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
   end
 
   defp call_para_on_air(payload, relative_path) do
-    # Connect to air's NATS at localhost:4222 with a short timeout
-    # (this assumes air is reachable via network or leafnode bridge)
-    case Gnat.start_link(name: :para_air_conn) do
+    # Connect to air's NATS via Tailscale (mini and air are on separate NATS clusters)
+    # Air's Tailscale IP is configured in the pillar (air_tailscale_ip)
+    air_host = BotArmyLibraryRuntime.ConfigLoader.get("AIR_TAILSCALE_IP", "100.90.128.89")
+
+    Logger.info("para.fs.write: Connecting to air's NATS at #{air_host}:4222")
+
+    case Gnat.start_link(name: :para_air_conn, host: air_host, port: 4222) do
       {:ok, conn} ->
         result =
           Gnat.request(conn, "para.fs.write", Jason.encode!(payload), receive_timeout: 5_000)

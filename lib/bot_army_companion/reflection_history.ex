@@ -103,6 +103,8 @@ defmodule BotArmyCompanion.ReflectionHistory do
       {:ok, entries} ->
         reflections =
           entries
+          |> Enum.map(&extract_filename/1)
+          |> Enum.filter(&is_binary/1)
           |> Enum.filter(&String.match?(&1, ~r/angle-#{angle}/))
           |> Enum.map(&parse_reflection_filename/1)
           |> Enum.filter(&(&1 != nil))
@@ -114,6 +116,12 @@ defmodule BotArmyCompanion.ReflectionHistory do
         error
     end
   end
+
+  # Extract filename from entry (handles both string and map formats from PARA)
+  defp extract_filename(entry) when is_binary(entry), do: entry
+  defp extract_filename(%{"name" => name}), do: name
+  defp extract_filename(%{name: name}), do: name
+  defp extract_filename(_), do: nil
 
   # Read the most recent reflection's file content and pull out the latest
   # "## Abby's reply — ..." section, if any. This is the one piece of real

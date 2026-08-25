@@ -22,6 +22,10 @@ defmodule BotArmyCompanion.Application do
     # Configure Personality.Repo for heartbeat persistence
     Application.put_env(:bot_army_library_runtime, :personality_repo, BotArmyCompanion.Repo)
 
+    # Load configuration from Salt-deployed config file (not env vars)
+    config_data = BotArmyLibraryRuntime.ConfigLoader.load_config()
+    Application.put_env(:bot_army_library_runtime, :config_data, config_data)
+
     children =
       []
       |> maybe_add_repo()
@@ -60,7 +64,8 @@ defmodule BotArmyCompanion.Application do
         {BotArmyLibraryRuntime.LeaderElection,
          service: "companion",
          node_name: BotArmyLibraryRuntime.ConfigLoader.get("NODE_NAME", "unknown"),
-         default_role: BotArmyLibraryRuntime.ConfigLoader.get_role("COMPANION_NODE_ROLE"),
+         default_role:
+           parse_role(BotArmyLibraryRuntime.ConfigLoader.get("COMPANION_NODE_ROLE", "primary")),
          on_role_change: {BotArmyCompanion.NATS.Consumer, :leader_role_changed, []}},
         # NATS consumer for companion.heartbeat requests
         {BotArmyCompanion.NATS.Consumer, []}
@@ -74,4 +79,8 @@ defmodule BotArmyCompanion.Application do
   defp skip_workers? do
     System.get_env("BOT_SKIP_WORKERS") == "true"
   end
+
+  defp parse_role("standby"), do: :standby
+  defp parse_role("primary"), do: :primary
+  defp parse_role(_), do: :primary
 end
