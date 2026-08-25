@@ -5,6 +5,18 @@ import Config
 # set by Salt/launchd on the deploy target were never actually read.
 
 if config_env() == :prod do
+  # DEBUG: Log what environment variables are actually available at startup
+  IO.puts(:stderr, "[DEBUG] Environment variables at config_env() == :prod:")
+  IO.puts(:stderr, "  COMPANION_NODE_ROLE = #{inspect(System.get_env("COMPANION_NODE_ROLE"))}")
+
+  IO.puts(
+    :stderr,
+    "  BOT_ARMY_COMPANION_DB_NAME = #{inspect(System.get_env("BOT_ARMY_COMPANION_DB_NAME"))}"
+  )
+
+  IO.puts(:stderr, "  DATABASE_NAME = #{inspect(System.get_env("DATABASE_NAME"))}")
+  IO.puts(:stderr, "  DATABASE_PORT = #{inspect(System.get_env("DATABASE_PORT"))}")
+
   config :bot_army_companion, BotArmyCompanion.Repo,
     database:
       System.get_env("BOT_ARMY_COMPANION_DB_NAME") || System.get_env("DATABASE_NAME") ||
