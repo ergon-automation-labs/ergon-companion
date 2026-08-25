@@ -19,6 +19,9 @@ defmodule BotArmyCompanion.Application do
     # Note: BotArmyLibraryRuntime.Telemetry and BotArmyLibraryRuntime.NATS.Connection are started
     # by bot_army_runtime automatically — do not add them here.
 
+    # Configure Personality.Repo for heartbeat persistence
+    Application.put_env(:bot_army_library_runtime, :personality_repo, BotArmyCompanion.Repo)
+
     children =
       []
       |> maybe_add_repo()
