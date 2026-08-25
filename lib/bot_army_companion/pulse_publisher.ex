@@ -42,6 +42,8 @@ defmodule BotArmyCompanion.PulsePublisher do
   @impl true
   def handle_info(:publish_health, state) do
     Task.start(fn -> publish_system_health(state) end)
+    # Also execute reflection and write observations to PARA on the same cadence
+    Task.start(fn -> execute_reflection_task() end)
     Process.send_after(self(), :publish_health, @health_interval_ms)
     {:noreply, state}
   end
@@ -126,6 +128,18 @@ defmodule BotArmyCompanion.PulsePublisher do
     case count_active_thoughts() do
       0 -> :degraded
       _ -> :nominal
+    end
+  end
+
+  # Execute reflection cycle and write observations to PARA
+  # Called on the same ~30s cadence as health publishing
+  defp execute_reflection_task do
+    try do
+      Logger.debug("PulsePublisher: Executing reflection cycle")
+      BotArmyCompanion.Handlers.HeartbeatHandler.handle_heartbeat(%{})
+    rescue
+      e ->
+        Logger.warning("PulsePublisher: Reflection execution failed: #{inspect(e)}")
     end
   end
 end

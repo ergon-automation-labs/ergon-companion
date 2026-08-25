@@ -73,6 +73,49 @@ defmodule BotArmyCompanion.ParaClient do
   end
 
   @doc """
+  Write a file to PARA.
+
+  Options:
+  - :mode (default "write") - "write", "append", etc.
+  - :timeout_ms (default 5000) - NATS request timeout
+
+  Returns {:ok, %{bytes_written: N, ...}} or {:error, reason}.
+  """
+  def write_file(relative_path, content, opts \\ []) do
+    Logger.debug("ParaClient.write_file: #{relative_path} (#{byte_size(content)} bytes)")
+
+    mode = Keyword.get(opts, :mode, "write")
+    timeout_ms = Keyword.get(opts, :timeout_ms, 5_000)
+
+    payload = %{
+      "relative_path" => relative_path,
+      "content" => content,
+      "mode" => mode
+    }
+
+    case call_nats_subject("para.fs.write", payload, timeout_ms) do
+      {:ok, %{"data" => data}} when is_map(data) ->
+        case Map.get(data, "bytes_written") do
+          bytes when is_integer(bytes) ->
+            Logger.debug("ParaClient.write_file: Successfully wrote #{bytes} bytes")
+            {:ok, data}
+
+          _ ->
+            Logger.error("ParaClient.write_file: Missing 'bytes_written' in response")
+            {:error, "Invalid response format"}
+        end
+
+      {:ok, response} ->
+        Logger.error("ParaClient.write_file: Unexpected response: #{inspect(response)}")
+        {:error, "Invalid response format"}
+
+      error ->
+        Logger.error("ParaClient.write_file: NATS error: #{inspect(error)}")
+        error
+    end
+  end
+
+  @doc """
   Search PARA for files matching a query.
 
   Returns {:ok, results} or {:error, reason}.
