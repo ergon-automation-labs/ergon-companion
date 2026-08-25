@@ -20,9 +20,9 @@ defmodule BotArmyCompanion.Repo.Migrations.SeedReflectionAnglesWinsTrustRest do
   def up do
     now = DateTime.utc_now()
 
-    id1 = Ecto.UUID.generate()
-    id2 = Ecto.UUID.generate()
-    id3 = Ecto.UUID.generate()
+    id1 = Ecto.UUID.string_to_binary(Ecto.UUID.generate())
+    id2 = Ecto.UUID.string_to_binary(Ecto.UUID.generate())
+    id3 = Ecto.UUID.string_to_binary(Ecto.UUID.generate())
 
     rows = [
       %{
