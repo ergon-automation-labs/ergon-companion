@@ -6,7 +6,7 @@ defmodule BotArmyCompanion.Repo.Migrations.AddMissingAngles8_9_10 do
 
     rows = [
       %{
-        id: Ecto.UUID.generate(),
+        id: Ecto.UUID.string_to_binary(Ecto.UUID.generate()),
         angle: 8,
         query:
           "What's a recent win — a fix shipped, a fast diagnosis, an outreach reply, anything that actually happened — that hasn't been acknowledged? Celebrate the action taken, not the outcome. One paragraph, warm.",
@@ -17,7 +17,7 @@ defmodule BotArmyCompanion.Repo.Migrations.AddMissingAngles8_9_10 do
         updated_at: now
       },
       %{
-        id: Ecto.UUID.generate(),
+        id: Ecto.UUID.string_to_binary(Ecto.UUID.generate()),
         angle: 9,
         query:
           "Is Abby's trust in the Bot Army system growing or eroding right now? Is she fighting the same fire repeatedly, or genuinely making progress? What would rebuild confidence if it's slipping? One paragraph, honest.",
@@ -28,7 +28,7 @@ defmodule BotArmyCompanion.Repo.Migrations.AddMissingAngles8_9_10 do
         updated_at: now
       },
       %{
-        id: Ecto.UUID.generate(),
+        id: Ecto.UUID.string_to_binary(Ecto.UUID.generate()),
         angle: 10,
         query:
           "When did Abby last fully disconnect — not rest-shaped busywork, actual stopping? Is she protecting recovery time or pretending to? One paragraph, direct but kind.",
