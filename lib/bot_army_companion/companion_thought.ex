@@ -20,7 +20,6 @@ defmodule BotArmyCompanion.CompanionThought do
     companion_thought
     |> cast(attrs, [:angle, :query, :active, :priority, :tags])
     |> validate_required([:angle, :query])
-    |> validate_inclusion(:angle, 0..7)
     |> unique_constraint(:angle)
   end
 end
