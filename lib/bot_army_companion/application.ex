@@ -56,8 +56,8 @@ defmodule BotArmyCompanion.Application do
         # while the consumer is still connecting (not yet subscribed either way).
         {BotArmyLibraryRuntime.LeaderElection,
          service: "companion",
-         node_name: System.get_env("NODE_NAME", "unknown"),
-         default_role: BotArmyLibraryRuntime.LeaderElection.role_from_env("COMPANION_NODE_ROLE"),
+         node_name: BotArmyLibraryRuntime.ConfigLoader.get("NODE_NAME", "unknown"),
+         default_role: BotArmyLibraryRuntime.ConfigLoader.get_role("COMPANION_NODE_ROLE"),
          on_role_change: {BotArmyCompanion.NATS.Consumer, :leader_role_changed, []}},
         # NATS consumer for companion.heartbeat requests
         {BotArmyCompanion.NATS.Consumer, []}
