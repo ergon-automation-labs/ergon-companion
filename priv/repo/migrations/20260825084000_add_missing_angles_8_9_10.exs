@@ -40,12 +40,7 @@ defmodule BotArmyCompanion.Repo.Migrations.AddMissingAngles8_9_10 do
       }
     ]
 
-    repo().insert_all(
-      "companion_thoughts",
-      rows,
-      on_conflict: :replace_all,
-      conflict_target: :angle
-    )
+    repo().insert_all("companion_thoughts", rows)
   end
 
   def down do
