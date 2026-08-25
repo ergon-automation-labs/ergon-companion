@@ -49,6 +49,6 @@ defmodule BotArmyCompanion.Repo.Migrations.AddMissingAngles8_9_10 do
   end
 
   def down do
-    from(ct in "companion_thoughts", where: ct.angle in [8, 9, 10]) |> repo().delete_all()
+    execute("DELETE FROM companion_thoughts WHERE angle IN (8, 9, 10)")
   end
 end
