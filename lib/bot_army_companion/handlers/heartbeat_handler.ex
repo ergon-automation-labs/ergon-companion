@@ -292,6 +292,7 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
 
     Logger.debug("write_to_para: Sending payload to para.fs.write")
 
+    # First try the local NATS connection (works if on air or if leafnode routes properly)
     case call_nats_subject("para.fs.write", payload, 5_000) do
       {:ok, %{"ok" => false} = response} ->
         reason = Map.get(response, "error", "unknown error")
@@ -302,9 +303,55 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
         Logger.info("para.fs.write succeeded for #{relative_path}: #{inspect(response)}")
         {:ok, "written"}
 
+      {:error, "No responders available for para.fs.write"} ->
+        # If on mini and PARA not found, try connecting to air's NATS directly
+        Logger.info("para.fs.write: No responders on local NATS, trying air's NATS")
+        call_para_on_air(payload, relative_path)
+
       error ->
         Logger.error("para.fs.write failed for #{relative_path}: #{inspect(error)}")
         error
+    end
+  end
+
+  defp call_para_on_air(payload, relative_path) do
+    # Connect to air's NATS at localhost:4222 with a short timeout
+    # (this assumes air is reachable via network or leafnode bridge)
+    case Gnat.start_link(name: :para_air_conn) do
+      {:ok, conn} ->
+        result =
+          Gnat.request(conn, "para.fs.write", Jason.encode!(payload), receive_timeout: 5_000)
+
+        Gnat.close(conn)
+
+        case result do
+          {:ok, msg} ->
+            case Jason.decode(msg.body) do
+              {:ok, response} ->
+                if Map.get(response, "ok", false) do
+                  Logger.info("para.fs.write succeeded via air NATS for #{relative_path}")
+                  {:ok, "written"}
+                else
+                  reason = Map.get(response, "error", "unknown error")
+                  Logger.error("para.fs.write rejected via air: #{reason}")
+                  {:error, "para.fs.write rejected: #{reason}"}
+                end
+
+              {:error, _} ->
+                Logger.info("para.fs.write succeeded via air NATS for #{relative_path}")
+                {:ok, "written"}
+            end
+
+          {:error, :timeout} ->
+            {:error, "para.fs.write timeout via air NATS"}
+
+          {:error, reason} ->
+            {:error, "para.fs.write failed via air NATS: #{inspect(reason)}"}
+        end
+
+      {:error, reason} ->
+        Logger.error("Could not connect to air's NATS for para.fs.write: #{inspect(reason)}")
+        {:error, "Could not reach PARA on air"}
     end
   end
 
