@@ -23,3 +23,9 @@ erl_crash.dump
 
 # Release artifacts
 *.tar.gz
+
+# runtime publish/validation state markers (never commit)
+.push-validated
+
+# runtime publish/validation state markers (never commit)
+.release-published
