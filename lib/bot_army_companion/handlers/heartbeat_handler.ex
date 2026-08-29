@@ -9,59 +9,52 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
   require Logger
 
   alias BotArmyLibraryRuntime.NATS.Publisher
+  alias BotArmyCompanion.Wins
+  alias BotArmyCompanion.ReflectionFormatter
 
   def handle_heartbeat(_message) do
-    start_time = System.monotonic_time(:millisecond)
+    # Heartbeat should be a quick liveness check, not a heavy reflection cycle.
+    # Reflections are triggered on-demand via companion.reflection endpoint.
+    # Just respond immediately with basic health status.
 
-    case execute_reflection() do
-      {:ok, reflection} ->
-        duration = System.monotonic_time(:millisecond) - start_time
-        Logger.info("Companion heartbeat completed in #{duration}ms")
+    result = %{
+      ok: true,
+      data: %{
+        status: "healthy"
+      }
+    }
 
-        result = %{
-          ok: true,
-          data: %{
-            status: "success",
-            reflection: reflection,
-            duration_ms: duration
-          }
-        }
-
-        publish_event(result)
-        {:reply, result}
-
-      {:error, reason} ->
-        duration = System.monotonic_time(:millisecond) - start_time
-        Logger.error("Companion heartbeat failed: #{inspect(reason)}")
-
-        result = %{
-          ok: false,
-          data: %{
-            status: "error",
-            duration_ms: duration
-          },
-          error: inspect(reason)
-        }
-
-        publish_event(result)
-        {:reply, result}
-    end
+    Logger.debug("Companion heartbeat responded: healthy")
+    {:reply, result}
   end
 
-  defp execute_reflection do
-    Logger.debug("execute_reflection: Starting reflection cycle")
+  @doc "Trigger a reflection on the specified angle or a random one"
+  def execute_reflection(angle \\ nil) do
+    start_time = System.monotonic_time(:millisecond)
 
-    audit_stale_dates()
+    case gather_system_state() do
+      {:ok, state} ->
+        # If angle not specified, use state's angle; otherwise use specified angle
+        state_with_angle = if angle, do: %{state | angle: angle}, else: state
 
-    with {:ok, state} <- gather_system_state(),
-         {:ok, reflection} <- generate_reflection(state),
-         {:ok, _} <- write_to_para(reflection) do
-      Logger.debug("execute_reflection: All steps completed successfully")
-      {:ok, reflection}
-    else
-      error ->
-        Logger.error("execute_reflection: Failed with error: #{inspect(error)}")
-        error
+        case generate_reflection(state_with_angle) do
+          {:ok, reflection} ->
+            duration = System.monotonic_time(:millisecond) - start_time
+            Logger.info("Companion reflection completed in #{duration}ms")
+
+            # Persist to PARA
+            write_to_para(reflection)
+
+            {:ok, reflection}
+
+          {:error, reason} ->
+            Logger.error("Companion reflection generation failed: #{inspect(reason)}")
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        Logger.error("Companion reflection state gathering failed: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 
@@ -149,24 +142,30 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
   end
 
   defp generate_reflection_with_query(state, query, angle) do
-    case BotArmyCompanion.ReflectionHistory.summarize_prior_reflections(angle, 5) do
-      {:ok, history} ->
-        enhanced_query = enhance_query_with_history(query, history)
+    # Fetch prior reflection history
+    history_res = BotArmyCompanion.ReflectionHistory.summarize_prior_reflections(angle, 5)
+    # Fetch recent wins
+    wins_res = Wins.fetch_recent_wins()
 
-        Logger.debug(
-          "generate_reflection: Enhanced query with #{history.count} prior reflections"
-        )
+    history =
+      case history_res do
+        {:ok, h} -> h
+        _ -> %{count: 0, context: ""}
+      end
 
-        generate_reflection_from_query(state, enhanced_query)
+    wins =
+      case wins_res do
+        wins when is_list(wins) -> wins
+        _ -> []
+      end
 
-      {:error, reason} ->
-        Logger.warning(
-          "generate_reflection: Could not fetch history (non-fatal): #{inspect(reason)}"
-        )
+    enhanced_query = enhance_query_with_context(query, history, wins)
 
-        # Graceful degradation: proceed with original query if history fetch fails
-        generate_reflection_from_query(state, query)
-    end
+    Logger.debug(
+      "generate_reflection: Enhanced query with #{history.count} prior reflections and #{length(wins)} wins"
+    )
+
+    generate_reflection_from_query(state, enhanced_query)
   end
 
   defp generate_reflection_from_query(state, query) do
@@ -181,24 +180,34 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
     end
   end
 
-  defp enhance_query_with_history(query, %{count: 0}) do
-    # No prior reflections, use original query
-    query
-  end
+  defp enhance_query_with_context(query, history, wins) do
+    context_parts = []
 
-  defp enhance_query_with_history(query, %{context: context_text, count: _count})
-       when byte_size(context_text) > 0 do
-    # Inject prior context into the query
-    """
-    #{query}
+    context_parts =
+      if history.count > 0 and byte_size(history.context) > 0 do
+        ["Prior reflections context: #{history.context}" | context_parts]
+      else
+        context_parts
+      end
 
-    Context from prior reflections: #{context_text}
-    """
-  end
+    context_parts =
+      if length(wins) > 0 do
+        wins_text = Enum.map_join(wins, "\n", fn win -> "• #{win}" end)
+        ["Recent wins: #{wins_text}" | context_parts]
+      else
+        context_parts
+      end
 
-  defp enhance_query_with_history(query, _history) do
-    # Fallback: use original query
-    query
+    if Enum.empty?(context_parts) do
+      query
+    else
+      """
+      #{query}
+
+      Context for reflection:
+      #{Enum.join(context_parts, "\n\n")}
+      """
+    end
   end
 
   defp get_reflection_query(angle) do
@@ -333,8 +342,14 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
     Logger.debug("write_to_para: Starting with reflection: #{inspect(reflection)}")
 
     angle = Map.get(reflection, :angle, "unknown")
-    relative_path = "areas/companion/observations/#{Date.utc_today()}-angle-#{angle}.md"
-    content = format_para_content(reflection)
+    timestamp = Map.get(reflection, :timestamp, DateTime.utc_now() |> DateTime.to_iso8601())
+
+    # Use new formatter with tags and wikilinks
+    {:ok, formatted_content} = ReflectionFormatter.format_reflection(reflection)
+
+    # Updated path: areas/Companion/reflections/YYYY-MM-DD_angle_title.md
+    relative_path = "areas/Companion/reflections/#{Date.utc_today()}_#{angle}_reflection.md"
+    content = formatted_content
 
     Logger.debug(
       "write_to_para: Path=#{relative_path}, content_size=#{String.length(content)} bytes"
