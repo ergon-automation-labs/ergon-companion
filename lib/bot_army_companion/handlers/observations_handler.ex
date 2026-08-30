@@ -28,7 +28,10 @@ defmodule BotArmyCompanion.Handlers.ObservationsHandler do
       {:ok, entries} ->
         observations =
           entries
-          |> Enum.map(&parse_filename/1)
+          |> Enum.map(fn entry ->
+            name = if is_map(entry), do: Map.get(entry, "name"), else: entry
+            parse_filename(name)
+          end)
           |> Enum.filter(&(&1 != nil))
           |> Enum.sort_by(& &1.date, :desc)
           |> Enum.take(limit)

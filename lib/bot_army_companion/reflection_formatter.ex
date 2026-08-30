@@ -129,7 +129,9 @@ defmodule BotArmyCompanion.ReflectionFormatter do
   defp format_angle("progress"), do: "Progress & Momentum"
   defp format_angle("health"), do: "Bot Army Health"
   defp format_angle("balance"), do: "Life Balance"
-  defp format_angle(angle), do: String.capitalize(angle)
+  defp format_angle(angle) when is_integer(angle), do: "Reflection #{angle}"
+  defp format_angle(angle) when is_binary(angle), do: String.capitalize(angle)
+  defp format_angle(angle), do: to_string(angle)
 
   defp load_glossary do
     # Load glossary from PARA and parse tags

@@ -317,12 +317,12 @@ verify-bot-nats:
 	$(MAKE) -C "$$MONOREPO_ROOT" verify-bot-nats BOT=$$BOT_NAME
 
 test-reflection:
-	@echo "Triggering companion reflection (companion.heartbeat)..."
-	@nats request --server nats://localhost:4223 companion.heartbeat '{}' --timeout 60s 2>&1 | jq . || nats request --server nats://localhost:4223 companion.heartbeat '{}' --timeout 60s 2>&1
+	@echo "Triggering companion reflection (companion.reflection)..."
+	@nats request --server nats://localhost:4223 companion.reflection '{}' --timeout 60s 2>&1 | jq . || nats request --server nats://localhost:4223 companion.reflection '{}' --timeout 60s 2>&1
 
 test-reflection-prod:
 	@echo "Triggering companion reflection on prod NATS (4222)..."
-	@nats request --server nats://localhost:4222 companion.heartbeat '{}' --timeout 60s 2>&1 | jq . || nats request --server nats://localhost:4222 companion.heartbeat '{}' --timeout 60s 2>&1
+	@nats request --server nats://localhost:4222 companion.reflection '{}' --timeout 60s 2>&1 | jq . || nats request --server nats://localhost:4222 companion.reflection '{}' --timeout 60s 2>&1
 
 # Shared targets (push, credo, pre-push-cleanup, bump-version, git-push).
 # Defined once in bot_army_infra so they cannot drift per repo.

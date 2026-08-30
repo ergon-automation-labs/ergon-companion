@@ -344,8 +344,16 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
     angle = Map.get(reflection, :angle, "unknown")
     timestamp = Map.get(reflection, :timestamp, DateTime.utc_now() |> DateTime.to_iso8601())
 
-    # Use new formatter with tags and wikilinks
-    {:ok, formatted_content} = ReflectionFormatter.format_reflection(reflection)
+    # Use new formatter with tags and wikilinks, fallback if it fails
+    formatted_content =
+      case ReflectionFormatter.format_reflection(reflection) do
+        {:ok, content} ->
+          content
+
+        {:error, reason} ->
+          Logger.warning("Formatter failed: #{reason}, using plain format")
+          "## #{timestamp}\n\n#{Map.get(reflection, :reflection, "")}\n"
+      end
 
     # Updated path: areas/Companion/reflections/YYYY-MM-DD_angle_title.md
     relative_path = "areas/Companion/reflections/#{Date.utc_today()}_#{angle}_reflection.md"

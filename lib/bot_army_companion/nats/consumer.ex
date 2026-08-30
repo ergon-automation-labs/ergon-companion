@@ -14,6 +14,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
   require Logger
 
   @reconnect_delay_ms 5000
+  @heartbeat_interval_ms 30_000
   @version Mix.Project.config()[:version]
 
   # Register subjects with their metadata for runtime discovery
@@ -21,7 +22,12 @@ defmodule BotArmyCompanion.NATS.Consumer do
     %{
       subject: "companion.heartbeat",
       type: :request_reply,
-      description: "Companion heartbeat - reflect on context and system state"
+      description: "Quick liveness check - just responds healthy"
+    },
+    %{
+      subject: "companion.reflection",
+      type: :request_reply,
+      description: "Trigger a reflection on a specific angle or default (on-demand)"
     },
     %{
       subject: "companion.observations.list",
@@ -57,6 +63,8 @@ defmodule BotArmyCompanion.NATS.Consumer do
       role: :standby
     }
 
+    send(self(), :heartbeat)
+
     {:ok, state, {:continue, :connect}}
   end
 
@@ -91,6 +99,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
     subscriptions =
       [
         "companion.heartbeat",
+        "companion.reflection",
         "companion.observations.list",
         "companion.observations.read",
         "companion.observations.reply"
@@ -164,7 +173,10 @@ defmodule BotArmyCompanion.NATS.Consumer do
   @impl true
   def handle_info({:msg, msg}, state) do
     BotArmyLibraryRuntime.Tracing.with_consumer_span(msg.topic, Map.get(msg, :headers), fn ->
-      Logger.debug("Received NATS message on subject: #{msg.topic}")
+      Logger.info(
+        "DEBUG: Received NATS message on subject: #{msg.topic}, reply_to=#{inspect(Map.get(msg, :reply_to))}"
+      )
+
       process_message(msg)
     end)
 
@@ -173,8 +185,13 @@ defmodule BotArmyCompanion.NATS.Consumer do
 
   defp process_message(msg) do
     if msg.reply_to do
+      Logger.info(
+        "DEBUG: process_message received request/reply on #{msg.topic}, reply_to=#{msg.reply_to}"
+      )
+
       handle_request_reply(msg)
     else
+      Logger.info("DEBUG: process_message received pub/sub on #{msg.topic}")
       handle_pubsub(msg)
     end
   end
@@ -183,6 +200,9 @@ defmodule BotArmyCompanion.NATS.Consumer do
     case msg.topic do
       "companion.heartbeat" ->
         handle_heartbeat_request(msg)
+
+      "companion.reflection" ->
+        handle_reflection_request(msg)
 
       "companion.observations.list" ->
         handle_observations_list_request(msg)
@@ -233,6 +253,48 @@ defmodule BotArmyCompanion.NATS.Consumer do
   rescue
     e ->
       Logger.error("Error handling companion.heartbeat request: #{inspect(e)}")
+  end
+
+  defp handle_reflection_request(msg) do
+    Logger.info("DEBUG: handle_reflection_request called, reply_to=#{msg.reply_to}")
+
+    # Start reflection in background, return job_id immediately (async pattern)
+    job_id = UUID.uuid4()
+    Task.start(fn -> execute_reflection_task(job_id) end)
+
+    response =
+      BotArmyLibraryRuntime.NATS.Reply.ok(%{
+        "job_id" => job_id,
+        "status" => "accepted",
+        "note" =>
+          "Reflection running in background. Poll companion.reflection.status to check progress."
+      })
+
+    case GenServer.call(BotArmyLibraryRuntime.NATS.Connection, :get_connection, 5000) do
+      {:ok, conn} ->
+        encoded_response = Jason.encode!(response)
+        Gnat.pub(conn, msg.reply_to, encoded_response)
+
+      {:error, reason} ->
+        Logger.warning(
+          "Failed to get NATS connection to reply to companion.reflection: #{inspect(reason)}"
+        )
+    end
+  rescue
+    e ->
+      Logger.error("Error handling companion.reflection request: #{inspect(e)}")
+  end
+
+  defp execute_reflection_task(job_id) do
+    Logger.info("Reflection task #{job_id} starting...")
+
+    case BotArmyCompanion.Handlers.HeartbeatHandler.execute_reflection() do
+      {:ok, reflection} ->
+        Logger.info("Reflection task #{job_id} completed successfully")
+
+      {:error, reason} ->
+        Logger.error("Reflection task #{job_id} failed: #{inspect(reason)}")
+    end
   end
 
   defp handle_observations_list_request(msg) do
@@ -319,6 +381,13 @@ defmodule BotArmyCompanion.NATS.Consumer do
           "Failed to get NATS connection to reply to #{msg.topic}: #{inspect(reason)}"
         )
     end
+  end
+
+  @impl true
+  def handle_info(:heartbeat, state) do
+    register_with_role(state)
+    Process.send_after(self(), :heartbeat, @heartbeat_interval_ms)
+    {:noreply, state}
   end
 
   @impl true

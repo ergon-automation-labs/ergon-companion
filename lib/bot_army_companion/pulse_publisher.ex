@@ -42,8 +42,7 @@ defmodule BotArmyCompanion.PulsePublisher do
   @impl true
   def handle_info(:publish_health, state) do
     Task.start(fn -> publish_system_health(state) end)
-    # Also execute reflection and write observations to PARA on the same cadence
-    Task.start(fn -> execute_reflection_task() end)
+    # Note: Reflections are triggered on-demand via heartbeat request, not autonomous
     Process.send_after(self(), :publish_health, @health_interval_ms)
     {:noreply, state}
   end
