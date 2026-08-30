@@ -59,14 +59,157 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
   end
 
   defp gather_system_state do
-    # Get current heartbeat count from PARA to determine rotation angle
+    # Gather comprehensive context for reflection: bot health, tasks, friction, calendar, inbox
     angle = get_reflection_angle()
+    timestamp = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    # Fetch context in parallel (non-blocking)
+    bot_health = fetch_bot_health()
+    active_tasks = fetch_active_tasks()
+    friction_summary = fetch_friction_summary(7)
+    calendar_events = fetch_calendar_events()
+    inbox_status = fetch_inbox_status()
+    daily_log = fetch_recent_daily_log()
 
     {:ok,
      %{
        angle: angle,
-       timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+       timestamp: timestamp,
+       bot_health: bot_health,
+       active_tasks: active_tasks,
+       friction_summary: friction_summary,
+       calendar_events: calendar_events,
+       inbox_status: inbox_status,
+       daily_log: daily_log
      }}
+  end
+
+  defp fetch_bot_health do
+    # Fetch bot health snapshot from bridge or registry
+    case call_nats_subject("bot.army.registry.query", %{"service" => "all"}, 3_000) do
+      {:ok, %{"data" => %{"bots" => bots}}} ->
+        unhealthy =
+          bots
+          |> Enum.filter(fn bot -> bot["status"] != "healthy" end)
+          |> Enum.map(fn bot -> "#{bot["name"]}: #{bot["status"]}" end)
+
+        case unhealthy do
+          [] -> "All bots healthy"
+          issues -> "Issues: #{Enum.join(issues, "; ")}"
+        end
+
+      _ ->
+        "Bot health: unavailable"
+    end
+  rescue
+    _ -> "Bot health: error fetching"
+  end
+
+  defp fetch_active_tasks do
+    # Fetch active GTD tasks to understand what you're working on
+    case call_nats_subject("bridge.task.list", %{"status" => "active"}, 5_000) do
+      {:ok, %{"data" => %{"tasks" => tasks}}} ->
+        count = length(tasks)
+
+        top_3 =
+          tasks
+          |> Enum.take(3)
+          |> Enum.map(fn t -> "• #{t["title"]}" end)
+          |> Enum.join("\n")
+
+        "Active tasks: #{count}\nTop priorities:\n#{top_3}"
+
+      _ ->
+        "Active tasks: unavailable"
+    end
+  rescue
+    _ -> "Active tasks: error fetching"
+  end
+
+  defp fetch_friction_summary(days) do
+    # Fetch friction points from last N days to understand system pain
+    case call_nats_subject("system.friction.summary", %{"days" => days}, 3_000) do
+      {:ok, %{"data" => %{"summary" => summary}}} ->
+        top_3 =
+          summary
+          |> Enum.take(3)
+          |> Enum.map(fn f -> "• #{f["reason"]}: #{f["count"]}x" end)
+          |> Enum.join("\n")
+
+        "Top friction (#{days}d): #{Enum.sum(Map.values(summary))}\n#{top_3}"
+
+      _ ->
+        "Friction: unavailable"
+    end
+  rescue
+    _ -> "Friction: error fetching"
+  end
+
+  defp fetch_calendar_events do
+    # Fetch upcoming calendar events to understand what's coming
+    case call_nats_subject("calendar.events.upcoming", %{"days" => 14}, 3_000) do
+      {:ok, %{"data" => %{"events" => events}}} ->
+        count = length(events)
+        next_event = List.first(events)
+
+        if next_event do
+          "Calendar: #{count} events upcoming\nNext: #{next_event["title"]} (#{next_event["date"]})"
+        else
+          "Calendar: empty"
+        end
+
+      _ ->
+        "Calendar: unavailable"
+    end
+  rescue
+    _ -> "Calendar: error fetching"
+  end
+
+  defp fetch_inbox_status do
+    # Fetch inbox to understand communication backlog
+    case call_nats_subject("inbox.status", %{}, 3_000) do
+      {:ok, %{"data" => %{"count" => count, "oldest_age_hours" => age}}} ->
+        if count > 0 do
+          "Inbox: #{count} waiting (oldest: #{age}h old)"
+        else
+          "Inbox: clear"
+        end
+
+      _ ->
+        "Inbox: unavailable"
+    end
+  rescue
+    _ -> "Inbox: error fetching"
+  end
+
+  defp fetch_recent_daily_log do
+    # Fetch today's and yesterday's daily log entries to see what actually got done
+    case call_nats_subject(
+           "para.fs.read",
+           %{"relative_path" => "projects/Bot Army/progress/DAILY_LOG.md"},
+           3_000
+         ) do
+      {:ok, %{"data" => %{"content" => content}}} ->
+        # Extract today's section (most recent entries)
+        lines = String.split(content, "\n")
+
+        today_entries =
+          lines
+          |> Enum.filter(fn line -> String.starts_with?(line, "- ") end)
+          |> Enum.take(5)
+          |> Enum.join("\n")
+
+        if byte_size(today_entries) > 0 do
+          "Recent progress:\n#{today_entries}"
+        else
+          "Daily log: no recent entries"
+        end
+
+      _ ->
+        "Daily log: unavailable"
+    end
+  rescue
+    _ -> "Daily log: error fetching"
   end
 
   defp get_reflection_angle do
@@ -159,10 +302,12 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
         _ -> []
       end
 
-    enhanced_query = enhance_query_with_context(query, history, wins)
+    # Pass system state for rich context
+    system_state = Map.drop(state, [:angle, :timestamp])
+    enhanced_query = enhance_query_with_context(query, history, wins, system_state)
 
     Logger.debug(
-      "generate_reflection: Enhanced query with #{history.count} prior reflections and #{length(wins)} wins"
+      "generate_reflection: Enhanced query with #{history.count} prior reflections, #{length(wins)} wins, and system context"
     )
 
     generate_reflection_from_query(state, enhanced_query)
@@ -180,12 +325,56 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
     end
   end
 
-  defp enhance_query_with_context(query, history, wins) do
+  defp enhance_query_with_context(query, history, wins, system_state \\ %{}) do
     context_parts = []
 
+    # Add system state context
+    context_parts =
+      if system_state[:bot_health] do
+        ["System State:\n#{system_state[:bot_health]}" | context_parts]
+      else
+        context_parts
+      end
+
+    context_parts =
+      if system_state[:active_tasks] do
+        ["#{system_state[:active_tasks]}" | context_parts]
+      else
+        context_parts
+      end
+
+    context_parts =
+      if system_state[:friction_summary] do
+        ["#{system_state[:friction_summary]}" | context_parts]
+      else
+        context_parts
+      end
+
+    context_parts =
+      if system_state[:calendar_events] do
+        ["#{system_state[:calendar_events]}" | context_parts]
+      else
+        context_parts
+      end
+
+    context_parts =
+      if system_state[:inbox_status] do
+        ["#{system_state[:inbox_status]}" | context_parts]
+      else
+        context_parts
+      end
+
+    context_parts =
+      if system_state[:daily_log] do
+        ["#{system_state[:daily_log]}" | context_parts]
+      else
+        context_parts
+      end
+
+    # Add prior reflections and wins (existing context)
     context_parts =
       if history.count > 0 and byte_size(history.context) > 0 do
-        ["Prior reflections context: #{history.context}" | context_parts]
+        ["Prior reflection patterns: #{history.context}" | context_parts]
       else
         context_parts
       end
@@ -193,7 +382,7 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
     context_parts =
       if length(wins) > 0 do
         wins_text = Enum.map_join(wins, "\n", fn win -> "• #{win}" end)
-        ["Recent wins: #{wins_text}" | context_parts]
+        ["Recent wins this week: #{wins_text}" | context_parts]
       else
         context_parts
       end
@@ -204,7 +393,7 @@ defmodule BotArmyCompanion.Handlers.HeartbeatHandler do
       """
       #{query}
 
-      Context for reflection:
+      Current situation:
       #{Enum.join(context_parts, "\n\n")}
       """
     end
