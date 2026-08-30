@@ -43,6 +43,11 @@ defmodule BotArmyCompanion.NATS.Consumer do
       subject: "companion.observations.reply",
       type: :request_reply,
       description: "Append Abby's reply to an observation"
+    },
+    %{
+      subject: "companion.presence",
+      type: :pubsub,
+      description: "Witness system publishes Eir's chimes (post-tool hook events)"
     }
   ]
 
@@ -102,7 +107,8 @@ defmodule BotArmyCompanion.NATS.Consumer do
         "companion.reflection",
         "companion.observations.list",
         "companion.observations.read",
-        "companion.observations.reply"
+        "companion.observations.reply",
+        "companion.presence"
       ]
       |> Enum.map(&subscribe_to_subject(state.conn, &1))
       |> Enum.filter(&(not is_nil(&1)))
@@ -177,7 +183,12 @@ defmodule BotArmyCompanion.NATS.Consumer do
         "DEBUG: Received NATS message on subject: #{msg.topic}, reply_to=#{inspect(Map.get(msg, :reply_to))}"
       )
 
-      process_message(msg)
+      # Special handling for companion.presence (witness system messages)
+      if msg.topic == "companion.presence" do
+        handle_presence_update(msg)
+      else
+        process_message(msg)
+      end
     end)
 
     {:noreply, state}
@@ -406,6 +417,24 @@ defmodule BotArmyCompanion.NATS.Consumer do
   @impl true
   def handle_info(:reconnect, state) do
     {:noreply, state, {:continue, :connect}}
+  end
+
+  defp handle_presence_update(msg) do
+    # Companion.presence messages come from the witness system (eir-witness.sh)
+    # They're not event-envelope-wrapped, just raw JSON
+    case Jason.decode(msg.body) do
+      {:ok, payload} ->
+        Logger.info(
+          "Eir presence update: #{Map.get(payload, "message", "silent")} (source: #{Map.get(payload, "source", "unknown")})"
+        )
+
+        # Could trigger downstream behavior here (notification, reflection trigger, etc.)
+        # For now, just log it so we know it's arriving
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to decode companion.presence message: #{inspect(reason)}")
+    end
   end
 
   defp handle_pubsub(msg) do
