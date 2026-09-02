@@ -229,7 +229,7 @@ _FIND_MONOREPO_ROOT = \
 	echo ""; \
 	exit 1
 
-deploy-bot:
+deploy-bot: check-release-published
 	@MONOREPO_ROOT=$$($(call _FIND_MONOREPO_ROOT)) || { \
 		echo "❌ Could not find monorepo root"; \
 		echo "   Expected to find Makefile with 'deploy-bot' target"; \
@@ -258,63 +258,6 @@ verify-bot-nats:
 	}; \
 	BOT_NAME=$$(basename $$(pwd) | sed 's/bot_army_//'); \
 	$(MAKE) -C "$$MONOREPO_ROOT" verify-bot-nats BOT=$${BOT_NAME}
-
-# Deployment targets that delegate to monorepo
-.PHONY: deploy-bot verify-bot verify-bot-nats
-
-_FIND_MONOREPO_ROOT = \
-	if [ -n "$(MONOREPO_ROOT)" ]; then \
-		echo "$(MONOREPO_ROOT)"; \
-		exit 0; \
-	fi; \
-	if [ -d "../../elixir_bots" ] && [ -f "../../elixir_bots/Makefile" ]; then \
-		if grep -q "verify-bot-nats:" "../../elixir_bots/Makefile"; then \
-			echo "$$(cd ../../elixir_bots && pwd)"; \
-			exit 0; \
-		fi; \
-	fi; \
-	CURRENT_DIR=$$(pwd); \
-	while [ "$$CURRENT_DIR" != "/" ]; do \
-		if [ -f "$$CURRENT_DIR/Makefile" ] && grep -q "verify-bot-nats:" "$$CURRENT_DIR/Makefile"; then \
-			if [ -d "$$CURRENT_DIR/bots" ] || [ -d "$$CURRENT_DIR/bot_army_infra" ]; then \
-				echo "$$CURRENT_DIR"; \
-				exit 0; \
-			fi; \
-		fi; \
-		CURRENT_DIR=$$(dirname "$$CURRENT_DIR"); \
-	done; \
-	echo ""; \
-	exit 1
-
-deploy-bot:
-	@MONOREPO_ROOT=$$($(call _FIND_MONOREPO_ROOT)) || { \
-		echo "❌ Could not find monorepo root"; \
-		echo "   Expected to find Makefile with 'deploy-bot' target"; \
-		echo "   Current directory: $$(pwd)"; \
-		exit 1; \
-	}; \
-	BOT_NAME=$$(basename $$(pwd) | sed 's/bot_army_//'); \
-	echo "Deploying from: $$(pwd)"; \
-	echo "Bot: $$BOT_NAME"; \
-	echo "Monorepo root: $$MONOREPO_ROOT"; \
-	echo ""; \
-	$(MAKE) -C "$$MONOREPO_ROOT" deploy-bot BOT=$$BOT_NAME TARGET=mini
-
-verify-bot:
-	@MONOREPO_ROOT=$$($(call _FIND_MONOREPO_ROOT)) || { \
-		echo "❌ Could not find monorepo root"; \
-		exit 1; \
-	}; \
-	BOT_NAME=$$(basename $$(pwd) | sed 's/bot_army_//'); \
-	$(MAKE) -C "$$MONOREPO_ROOT" verify-bot BOT=$$BOT_NAME
-
-verify-bot-nats:
-	@MONOREPO_ROOT=$$($(call _FIND_MONOREPO_ROOT)) || { \
-		echo "❌ Could not find monorepo root"; \
-		exit 1; \
-	}; \
-	BOT_NAME=$$(basename $$(pwd) | sed 's/bot_army_//'); \
-	$(MAKE) -C "$$MONOREPO_ROOT" verify-bot-nats BOT=$$BOT_NAME
 
 test-reflection:
 	@echo "Triggering companion reflection (companion.reflection)..."
