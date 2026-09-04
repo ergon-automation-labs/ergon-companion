@@ -299,7 +299,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
   defp execute_reflection_task(job_id) do
     Logger.info("Reflection task #{job_id} starting...")
 
-    case BotArmyCompanion.Handlers.HeartbeatHandler.execute_reflection() do
+    case BotArmyCompanion.Handlers.ReflectionHandler.execute_reflection() do
       {:ok, reflection} ->
         Logger.info("Reflection task #{job_id} completed successfully")
 
