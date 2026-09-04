@@ -23,6 +23,11 @@ defmodule BotArmyCompanion.PulsePublisher do
   # Under Synapse `system.health` stale window (90s); 30s cadence leaves margin for jitter.
   @health_interval_ms 30 * 1000
   @publish_interval_ms 30 * 60 * 1000
+  # Autonomous reflection cadence: the reflection cycle gathers system state and
+  # queries bridge.chat, so it's minutes of work — run it every 4 hours, first
+  # pass 5 minutes after boot so the beam and NATS settle before reflecting.
+  @reflection_warmup_ms 5 * 60 * 1000
+  @reflection_interval_ms 4 * 60 * 60 * 1000
   @service_name "companion"
   @envelope_source "bot_army_companion"
 
@@ -36,14 +41,21 @@ defmodule BotArmyCompanion.PulsePublisher do
     started_at = DateTime.utc_now() |> DateTime.truncate(:second)
     send(self(), :publish_health)
     send(self(), :publish_pulse)
+    Process.send_after(self(), :run_reflection, @reflection_warmup_ms)
     {:ok, %{started_at: started_at}}
   end
 
   @impl true
   def handle_info(:publish_health, state) do
     Task.start(fn -> publish_system_health(state) end)
-    # Note: Reflections are triggered on-demand via heartbeat request, not autonomous
     Process.send_after(self(), :publish_health, @health_interval_ms)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(:run_reflection, state) do
+    Task.start(fn -> execute_reflection_task() end)
+    Process.send_after(self(), :run_reflection, @reflection_interval_ms)
     {:noreply, state}
   end
 
@@ -131,11 +143,12 @@ defmodule BotArmyCompanion.PulsePublisher do
   end
 
   # Execute reflection cycle and write observations to PARA
-  # Called on the same ~30s cadence as health publishing
+  # Runs every @reflection_interval_ms via :run_reflection; on-demand requests
+  # still go through companion.reflection → Consumer → ReflectionHandler.
   defp execute_reflection_task do
     try do
-      Logger.debug("PulsePublisher: Executing reflection cycle")
-      BotArmyCompanion.Handlers.HeartbeatHandler.handle_heartbeat(%{})
+      Logger.info("PulsePublisher: Executing scheduled reflection cycle")
+      BotArmyCompanion.Handlers.ReflectionHandler.execute_reflection()
     rescue
       e ->
         Logger.warning("PulsePublisher: Reflection execution failed: #{inspect(e)}")

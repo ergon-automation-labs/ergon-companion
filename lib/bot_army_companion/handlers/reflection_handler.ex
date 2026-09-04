@@ -301,7 +301,19 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
     case request_bridge_chat(query) do
       {:ok, response} ->
         Logger.debug("generate_reflection: Got bridge.chat response")
-        {:ok, Map.put(state, :reflection, response)}
+
+        # The bridge returns a canned response (not an error) when its LLM service
+        # is unavailable — catch it here so we never persist "I'm not available
+        # right now" as a reflection (happened 2026-09-02 15:56).
+        if llm_unavailable_response?(response) do
+          Logger.warning(
+            "generate_reflection: bridge returned LLM-unavailable canned response — skipping reflection"
+          )
+
+          {:error, "LLM service unavailable"}
+        else
+          {:ok, Map.put(state, :reflection, response)}
+        end
 
       error ->
         Logger.error("generate_reflection: bridge.chat failed: #{inspect(error)}")
@@ -389,6 +401,14 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
       nil -> :error
     end
   end
+
+  # Matches the canned response ClaudeBridge.ChatResponder emits when its LLM
+  # service is unavailable (chat_responder.ex) — see generate_reflection_from_query.
+  defp llm_unavailable_response?(text) when is_binary(text) do
+    String.contains?(text, "I'm not available right now")
+  end
+
+  defp llm_unavailable_response?(_), do: false
 
   defp request_bridge_chat(query) do
     Logger.debug("request_bridge_chat: Starting with query: #{inspect(query)}")
