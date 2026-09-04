@@ -29,3 +29,4 @@ erl_crash.dump
 
 # runtime publish/validation state markers (never commit)
 .release-published
+.cache/
