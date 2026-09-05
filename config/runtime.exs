@@ -49,6 +49,22 @@ if config_env() == :prod do
         else: []
       )
 
+  # NATS configuration for bot_army_runtime — the library starts NATS.Connection
+  # with empty opts and its fail-safe default is the DEV broker (4223). Without
+  # this block companion joins the wrong bus: subscriptions, heartbeats and
+  # presence all live on 4223 while the fleet runs on 4222. Same pattern as
+  # bot_army_llm / bot_army_sre / bot_army_deploy_pipeline runtime.exs.
+  nats_host = BotArmyLibraryRuntime.ConfigLoader.get("NATS_HOST", "localhost")
+
+  nats_port =
+    BotArmyLibraryRuntime.ConfigLoader.get("NATS_PORT", "4222") |> String.to_integer()
+
+  config :bot_army_library_runtime, :nats,
+    servers: [{nats_host, nats_port}],
+    ping_interval: 30_000,
+    max_reconnect_attempts: 10,
+    reconnect_delay_ms: 1000
+
   config :logger,
     level: String.to_atom(BotArmyLibraryRuntime.ConfigLoader.get("LOG_LEVEL", "info"))
 end
