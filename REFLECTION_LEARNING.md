@@ -77,7 +77,9 @@ mix test
 
 # Manual smoke test (once deployed)
 # Trigger a reflection, then check that the next reflection includes prior context
-nats request --server nats://localhost:4223 companion.reflection '{}' --timeout 5s
+# (companion listens on the PROD broker — 4222; 4223 is the dev broker, where
+# nothing answers and the request hangs then times out)
+nats request --server nats://localhost:4222 companion.reflection '{}' --timeout 5s
 ```
 
 ## Future Enhancements
