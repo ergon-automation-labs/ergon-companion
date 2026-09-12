@@ -252,9 +252,12 @@ defmodule BotArmyCompanion.NATS.Consumer do
 
     case GenServer.call(BotArmyLibraryRuntime.NATS.Connection, :get_connection, 5000) do
       {:ok, conn} ->
-        # Response needs to be JSON-encoded before sending via Gnat.pub
-        encoded_response = Jason.encode!(response)
-        Gnat.pub(conn, msg.reply_to, encoded_response)
+        # Reply.ok/1 already returns a JSON-encoded string — publish it as-is.
+        # Double-encoding here (Jason.encode! of the string) sent a JSON string
+        # literal on the wire; consumers that decode the body then got a bare
+        # string instead of an object (this crashed the job scheduler's check
+        # loop at 2026-09-12 03:00 EEST and skipped the reflection slot).
+        Gnat.pub(conn, msg.reply_to, response)
 
       {:error, reason} ->
         Logger.warning(
@@ -283,8 +286,9 @@ defmodule BotArmyCompanion.NATS.Consumer do
 
     case GenServer.call(BotArmyLibraryRuntime.NATS.Connection, :get_connection, 5000) do
       {:ok, conn} ->
-        encoded_response = Jason.encode!(response)
-        Gnat.pub(conn, msg.reply_to, encoded_response)
+        # Reply.ok/1 already returns a JSON-encoded string — publish as-is
+        # (same double-encode bug as the heartbeat handler; see comment there).
+        Gnat.pub(conn, msg.reply_to, response)
 
       {:error, reason} ->
         Logger.warning(
