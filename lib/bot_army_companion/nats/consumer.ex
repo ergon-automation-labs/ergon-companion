@@ -6,12 +6,15 @@ defmodule BotArmyCompanion.NATS.Consumer do
   Uses standardized Reply format for request/reply patterns.
 
   All request/reply handlers should return responses using Reply helpers:
-  - BotArmyLibraryRuntime.NATS.Reply.ok(data) for success
-  - BotArmyLibraryRuntime.NATS.Reply.error(message, code) for errors
+  - Reply.ok(data) for success
+  - Reply.error(message, code) for errors
   """
 
   use GenServer
   require Logger
+
+  alias BotArmyCompanion.Reflections
+  alias BotArmyLibraryRuntime.NATS.Reply
 
   @reconnect_delay_ms 5000
   @heartbeat_interval_ms 30_000
@@ -48,8 +51,45 @@ defmodule BotArmyCompanion.NATS.Consumer do
       subject: "companion.presence",
       type: :pubsub,
       description: "Witness system publishes Eir's chimes (post-tool hook events)"
+    },
+    %{
+      subject: "companion.reflections.capture",
+      type: :request_reply,
+      description: "Store one reflection she wrote on a reflect screen"
+    },
+    %{
+      subject: "companion.reflections.list",
+      type: :request_reply,
+      description: "List her captured reflections, newest first"
+    },
+    %{
+      subject: "companion.reflections.read",
+      type: :request_reply,
+      description: "Read one of her captured reflections by id"
+    },
+    %{
+      subject: "events.reflection.captured",
+      type: :pubsub,
+      description: "Reflections captured on the dashboard reflect screens (stored on arrival)"
     }
   ]
+
+  @doc """
+  Every subject this consumer advertises, as registered for discovery.
+
+  Public so a test can assert what the floor subscribes to without starting a
+  broker: the two reflect screens used to publish into a subject that nothing
+  listened to, and "something is listening" is exactly what went wrong.
+  """
+  def subjects, do: @subjects
+
+  @doc """
+  The subjects a primary node subscribes to on connect.
+
+  Derived from `subjects/0` rather than written out a second time, so a subject
+  cannot be advertised and never subscribed to (or the reverse).
+  """
+  def business_subjects, do: Enum.map(@subjects, & &1.subject)
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -102,14 +142,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
     Logger.info("Connected to NATS, subscribing to topics")
 
     subscriptions =
-      [
-        "companion.heartbeat",
-        "companion.reflection",
-        "companion.observations.list",
-        "companion.observations.read",
-        "companion.observations.reply",
-        "companion.presence"
-      ]
+      business_subjects()
       |> Enum.map(&subscribe_to_subject(state.conn, &1))
       |> Enum.filter(&(not is_nil(&1)))
 
@@ -183,11 +216,18 @@ defmodule BotArmyCompanion.NATS.Consumer do
         "DEBUG: Received NATS message on subject: #{msg.topic}, reply_to=#{inspect(Map.get(msg, :reply_to))}"
       )
 
-      # Special handling for companion.presence (witness system messages)
-      if msg.topic == "companion.presence" do
-        handle_presence_update(msg)
-      else
-        process_message(msg)
+      # Two subjects arrive as bare JSON rather than an event envelope:
+      # companion.presence (witness chimes) and events.reflection.captured (her
+      # words, straight off the reflect screens).
+      case msg.topic do
+        "companion.presence" ->
+          handle_presence_update(msg)
+
+        "events.reflection.captured" ->
+          handle_reflection_captured(msg)
+
+        _other ->
+          process_message(msg)
       end
     end)
 
@@ -224,6 +264,11 @@ defmodule BotArmyCompanion.NATS.Consumer do
       "companion.observations.reply" ->
         handle_observations_reply_request(msg)
 
+      # The reflection verbs arrive under one prefix and dispatch through a
+      # single clause, so this reply table stays flat as they are added.
+      "companion.reflections." <> _ ->
+        handle_reflections_request(msg)
+
       _ ->
         Logger.debug("Unknown request/reply subject: #{msg.topic}")
     end
@@ -235,11 +280,11 @@ defmodule BotArmyCompanion.NATS.Consumer do
     response =
       case BotArmyCompanion.Handlers.HeartbeatHandler.handle_heartbeat(msg.body) do
         {:reply, %{ok: true, data: data}} ->
-          BotArmyLibraryRuntime.NATS.Reply.ok(data)
+          Reply.ok(data)
 
         {:reply, %{ok: false, data: data, error: reason}} ->
           # Handler includes both data (status/duration) and error message
-          BotArmyLibraryRuntime.NATS.Reply.error(
+          Reply.error(
             %{"data" => data, "error" => reason},
             :heartbeat_failed
           )
@@ -247,7 +292,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
         {:reply, result} ->
           # Fallback for any other reply format
           Logger.warning("Unexpected heartbeat handler response format: #{inspect(result)}")
-          BotArmyLibraryRuntime.NATS.Reply.error("Unexpected response format", :internal_error)
+          Reply.error("Unexpected response format", :internal_error)
       end
 
     case GenServer.call(BotArmyLibraryRuntime.NATS.Connection, :get_connection, 5000) do
@@ -277,7 +322,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
     Task.start(fn -> execute_reflection_task(job_id) end)
 
     response =
-      BotArmyLibraryRuntime.NATS.Reply.ok(%{
+      Reply.ok(%{
         "job_id" => job_id,
         "status" => "accepted",
         "note" =>
@@ -318,10 +363,10 @@ defmodule BotArmyCompanion.NATS.Consumer do
     response =
       case BotArmyCompanion.Handlers.ObservationsHandler.list_observations(limit) do
         {:ok, observations} ->
-          BotArmyLibraryRuntime.NATS.Reply.ok(%{"observations" => observations})
+          Reply.ok(%{"observations" => observations})
 
         {:error, reason} ->
-          BotArmyLibraryRuntime.NATS.Reply.error(inspect(reason), :list_failed)
+          Reply.error(inspect(reason), :list_failed)
       end
 
     reply(msg, response)
@@ -338,14 +383,14 @@ defmodule BotArmyCompanion.NATS.Consumer do
         filename when is_binary(filename) ->
           case BotArmyCompanion.Handlers.ObservationsHandler.read_observation(filename) do
             {:ok, content} ->
-              BotArmyLibraryRuntime.NATS.Reply.ok(%{"filename" => filename, "content" => content})
+              Reply.ok(%{"filename" => filename, "content" => content})
 
             {:error, reason} ->
-              BotArmyLibraryRuntime.NATS.Reply.error(inspect(reason), :read_failed)
+              Reply.error(inspect(reason), :read_failed)
           end
 
         _ ->
-          BotArmyLibraryRuntime.NATS.Reply.error("Missing 'filename'", :bad_request)
+          Reply.error("Missing 'filename'", :bad_request)
       end
 
     reply(msg, response)
@@ -365,10 +410,10 @@ defmodule BotArmyCompanion.NATS.Consumer do
              reply_text
            ) do
         {:ok, _} ->
-          BotArmyLibraryRuntime.NATS.Reply.ok(%{"filename" => filename})
+          Reply.ok(%{"filename" => filename})
 
         {:error, reason} ->
-          BotArmyLibraryRuntime.NATS.Reply.error(inspect(reason), :reply_failed)
+          Reply.error(inspect(reason), :reply_failed)
       end
 
     reply(msg, response)
@@ -376,6 +421,143 @@ defmodule BotArmyCompanion.NATS.Consumer do
     e ->
       Logger.error("Error handling companion.observations.reply request: #{inspect(e)}")
   end
+
+  # --- her captured reflections ----------------------------------------------
+
+  # Her words arrive on a subject that had no subscriber at all until now: the
+  # two reflect screens published them and core NATS dropped them, while the
+  # screen said "captured". Storing them is the whole point of this
+  # subscription. Her text is never logged — the line carries the id and the
+  # length, nothing else.
+  defp handle_reflection_captured(msg) do
+    case Jason.decode(msg.body) do
+      {:ok, payload} ->
+        case store_reflection(payload) do
+          {:ok, view} ->
+            Logger.info("Stored a captured reflection (#{view["chars"]} chars, id=#{view["id"]})")
+
+          {:error, reason} ->
+            Logger.warning("Refused a captured reflection: #{Reflections.explain(reason)}")
+        end
+
+      {:error, reason} ->
+        Logger.warning("Could not decode a captured reflection: #{inspect(reason)}")
+    end
+
+    :ok
+  end
+
+  # The three verbs reached by `"companion.reflections." <> _`. Each of them
+  # answers its caller — a subject we do not recognise gets a refusal rather
+  # than a timeout, so a typo in a caller is visible instead of silent.
+  defp handle_reflections_request(%{topic: "companion.reflections.capture"} = msg),
+    do: handle_reflections_capture_request(msg)
+
+  defp handle_reflections_request(%{topic: "companion.reflections.list"} = msg),
+    do: handle_reflections_list_request(msg)
+
+  defp handle_reflections_request(%{topic: "companion.reflections.read"} = msg),
+    do: handle_reflections_read_request(msg)
+
+  defp handle_reflections_request(msg) do
+    Logger.warning("Unknown reflections subject: #{msg.topic}")
+
+    reply(
+      msg,
+      Reply.error("there is no such reflections subject: #{msg.topic}", :validation_error)
+    )
+  end
+
+  defp handle_reflections_capture_request(msg) do
+    response =
+      case store_reflection(decode_body(msg.body)) do
+        {:ok, view} ->
+          Reply.ok(%{"reflection" => view})
+
+        {:error, reason} ->
+          Reply.error(
+            Reflections.explain(reason),
+            refusal_code(reason)
+          )
+      end
+
+    reply(msg, response)
+  end
+
+  defp handle_reflections_list_request(msg) do
+    limit = decode_body(msg.body) |> Map.get("limit", Reflections.default_limit())
+
+    response =
+      case read_reflections(limit) do
+        {:ok, reflections} ->
+          Reply.ok(%{
+            "reflections" => reflections,
+            "count" => length(reflections)
+          })
+
+        {:error, reason} ->
+          Reply.error(
+            Reflections.explain(reason),
+            refusal_code(reason)
+          )
+      end
+
+    reply(msg, response)
+  end
+
+  defp handle_reflections_read_request(msg) do
+    id = decode_body(msg.body) |> Map.get("id")
+
+    response =
+      case read_reflection(id) do
+        {:ok, reflection} ->
+          Reply.ok(%{"reflection" => reflection})
+
+        {:error, reason} ->
+          Reply.error(
+            Reflections.explain(reason),
+            refusal_code(reason)
+          )
+      end
+
+    reply(msg, response)
+  end
+
+  # The store is a database. A failure there is not a refusal, it is a missing
+  # answer — and a raised bug must stay a raised bug in the log rather than
+  # become a plausible "the store is down". Both are caught here, at the
+  # boundary where an answer has to exist, because a raise inside handle_info
+  # would take the subscriber down with it and lose every reflection after it.
+  defp store_reflection(payload) do
+    Reflections.capture(payload)
+  catch
+    kind, reason ->
+      Logger.error("Reflection store failed (#{kind}): #{inspect(reason)}")
+      {:error, :store_failed}
+  end
+
+  defp read_reflections(limit) do
+    Reflections.list(limit)
+  catch
+    kind, reason ->
+      Logger.error("Reflection read failed (#{kind}): #{inspect(reason)}")
+      {:error, :store_failed}
+  end
+
+  defp read_reflection(id) do
+    Reflections.get(id)
+  catch
+    kind, reason ->
+      Logger.error("Reflection read failed (#{kind}): #{inspect(reason)}")
+      {:error, :store_failed}
+  end
+
+  # A store that could not be reached and a payload that was refused are
+  # different answers, and a caller that cannot tell them apart will retry the
+  # wrong one.
+  defp refusal_code(:store_failed), do: :unavailable
+  defp refusal_code(:not_found), do: :not_found
+  defp refusal_code(_other), do: :validation_error
 
   defp decode_body(""), do: %{}
 
@@ -469,10 +651,10 @@ defmodule BotArmyCompanion.NATS.Consumer do
   #   response =
   #     case get_tasks() do
   #       {:ok, tasks} ->
-  #         BotArmyLibraryRuntime.NATS.Reply.ok(%{"tasks" => tasks})
+  #         Reply.ok(%{"tasks" => tasks})
   #
   #       {:error, reason} ->
-  #         BotArmyLibraryRuntime.NATS.Reply.error(inspect(reason), :list_failed)
+  #         Reply.error(inspect(reason), :list_failed)
   #     end
   #
   #   if state.conn do

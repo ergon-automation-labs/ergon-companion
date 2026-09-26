@@ -4,6 +4,8 @@ ExUnit.configure(exclude: [:integration, :load, :nats_live])
 
 ExUnit.start()
 
+Code.require_file("support/postgres_helper.ex", __DIR__)
+
 # Define Mox mocks for external dependencies
 Mox.defmock(HTTPClientMock, for: BotArmyCompanion.HTTPClient)
 
