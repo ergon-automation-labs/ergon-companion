@@ -10,6 +10,19 @@ config :logger, :console,
 
 config :logger_json, :backend, formatter: LoggerJSON.Formatters.DatadogLogger
 
+# The companion answers the reflections she writes. The uncensored lane is a
+# local model and is slow (measured ~45s for thirty tokens), so the answer is a
+# background job and the row carries its state while it runs. `mode: :inline`
+# in test runs it in the calling process, against the mock — nothing here should
+# be able to reach a real model during `mix test`.
+config :bot_army_companion, :reflection_answer,
+  enabled: true,
+  mode: :async,
+  model_type: "uncensored",
+  lane: "interactive",
+  max_tokens: 900,
+  budget_ms: 300_000
+
 config :bot_army_companion, ecto_repos: [BotArmyCompanion.Repo]
 
 config :bot_army_companion, BotArmyCompanion.Repo,

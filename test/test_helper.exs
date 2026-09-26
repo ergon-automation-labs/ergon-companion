@@ -8,6 +8,7 @@ Code.require_file("support/postgres_helper.ex", __DIR__)
 
 # Define Mox mocks for external dependencies
 Mox.defmock(HTTPClientMock, for: BotArmyCompanion.HTTPClient)
+Mox.defmock(ReflectionAnswerLlmMock, for: BotArmyCompanion.ReflectionAnswer.Llm)
 
 # Try to set up database sandbox, but don't fail if database is unavailable
 try do

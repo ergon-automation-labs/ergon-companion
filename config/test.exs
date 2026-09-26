@@ -14,6 +14,15 @@ import Config
 System.put_env("NATS_PORT", "42991")
 config :bot_army_library_runtime, :nats, servers: [{"localhost", 42_991}]
 
+# The answer side, hermetically: no broker, no model, no waiting. The seam is a
+# Mox mock (defined in test_helper.exs), and `:inline` means a captured
+# reflection is answered in the calling process, so a test can assert on the
+# stored answer instead of racing a task.
+config :bot_army_companion, :reflection_answer,
+  enabled: true,
+  mode: :inline,
+  llm: ReflectionAnswerLlmMock
+
 # The default suite never opens a database connection: every migration/store
 # test is tagged :integration and excluded in test_helper.exs. When you do run
 # them they go to a *test* database — never the companion's production database

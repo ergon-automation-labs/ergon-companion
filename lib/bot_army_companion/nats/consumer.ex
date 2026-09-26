@@ -13,6 +13,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
   use GenServer
   require Logger
 
+  alias BotArmyCompanion.ReflectionAnswer
   alias BotArmyCompanion.Reflections
   alias BotArmyLibraryRuntime.NATS.Reply
 
@@ -435,6 +436,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
         case store_reflection(payload) do
           {:ok, view} ->
             Logger.info("Stored a captured reflection (#{view["chars"]} chars, id=#{view["id"]})")
+            offer_answer(view["id"])
 
           {:error, reason} ->
             Logger.warning("Refused a captured reflection: #{Reflections.explain(reason)}")
@@ -472,6 +474,10 @@ defmodule BotArmyCompanion.NATS.Consumer do
     response =
       case store_reflection(decode_body(msg.body)) do
         {:ok, view} ->
+          # Asked before the caller is told, so a screen can read the state off
+          # its own reply. In production this returns immediately (the answer is
+          # a background job); nothing here waits for a model.
+          offer_answer(view["id"])
           Reply.ok(%{"reflection" => view})
 
         {:error, reason} ->
@@ -529,7 +535,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
   # boundary where an answer has to exist, because a raise inside handle_info
   # would take the subscriber down with it and lose every reflection after it.
   defp store_reflection(payload) do
-    Reflections.capture(payload)
+    Reflections.capture(payload, answer_state: initial_answer_state())
   catch
     kind, reason ->
       Logger.error("Reflection store failed (#{kind}): #{inspect(reason)}")
@@ -550,6 +556,37 @@ defmodule BotArmyCompanion.NATS.Consumer do
     kind, reason ->
       Logger.error("Reflection read failed (#{kind}): #{inspect(reason)}")
       {:error, :store_failed}
+  end
+
+  # Whether an answer is coming is decided at the moment the words are stored: a
+  # row that says "pending" forever because nothing was listening would be a lie,
+  # so a switched-off answer side stores "unasked" instead.
+  defp initial_answer_state do
+    if ReflectionAnswer.enabled?(), do: "pending", else: "unasked"
+  end
+
+  # Asking is fire-and-forget: a failure here must not become a failure to store
+  # her words, and the row already says what it knows.
+  defp offer_answer(id) do
+    case ReflectionAnswer.offer(id) do
+      :unasked ->
+        :ok
+
+      :ok ->
+        :ok
+
+      {:ok, _view} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Reflection #{id} was not answered: #{ReflectionAnswer.explain(reason)}")
+    end
+  catch
+    kind, _reason ->
+      # The reason is not logged: a store or broker error can quote the request,
+      # and the request is her text.
+      Logger.error("Asking the companion to answer reflection #{id} crashed (#{kind})")
+      :ok
   end
 
   # A store that could not be reached and a payload that was refused are

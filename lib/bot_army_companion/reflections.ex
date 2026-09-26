@@ -62,9 +62,12 @@ defmodule BotArmyCompanion.Reflections do
   "timestamp" => …}`. Refusals come from `prepare/1`; the words are stored
   exactly as they arrived.
   """
-  def capture(attrs) do
-    with {:ok, prepared} <- prepare(attrs) do
-      case Repo.insert(Reflection.changeset(%Reflection{}, prepared)) do
+  def capture(attrs, opts \\ []) do
+    with {:ok, prepared} <- prepare(attrs),
+         {:ok, answer_state} <- take_answer_state(Keyword.get(opts, :answer_state, "pending")) do
+      attrs = Map.put(prepared, :answer_state, answer_state)
+
+      case Repo.insert(Reflection.changeset(%Reflection{}, attrs)) do
         {:ok, row} ->
           {:ok, view(row)}
 
@@ -94,6 +97,48 @@ defmodule BotArmyCompanion.Reflections do
   end
 
   def prepare(_other), do: {:error, :not_a_map}
+
+  @doc """
+  Record what the companion said back — or that it could not say anything.
+
+  `answer_error` is the *code* the answer side gave us, never the provider's own
+  message. A provider message can quote the request, and the request is her text.
+  """
+  def record_answer(%Reflection{} = row, {:ok, %{text: text} = answered}) do
+    update_answer(row, %{
+      answer_state: "answered",
+      answer_text: text,
+      answered_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
+      answer_model: Map.get(answered, :model),
+      answer_error: nil,
+      promise_flagged: Map.get(answered, :promise_flagged) == true
+    })
+  end
+
+  def record_answer(%Reflection{} = row, {:error, reason}) do
+    update_answer(row, %{
+      answer_state: "failed",
+      answer_error: code_for(reason)
+    })
+  end
+
+  defp update_answer(row, attrs) do
+    case Repo.update(Reflection.answer_changeset(row, attrs)) do
+      {:ok, updated} -> {:ok, view(updated)}
+      {:error, _changeset} -> {:error, :invalid}
+    end
+  end
+
+  # An answer's failure is one of the codes the answer side can produce; anything
+  # else is a failure we cannot name, and says so rather than borrowing a name.
+  defp code_for(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp code_for(_other), do: "unavailable"
+
+  defp take_answer_state(state) when is_binary(state) do
+    if Reflection.answer_state?(state), do: {:ok, state}, else: {:error, :bad_answer_state}
+  end
+
+  defp take_answer_state(_other), do: {:error, :bad_answer_state}
 
   @doc """
   The most recent reflections, newest first.
@@ -149,7 +194,24 @@ defmodule BotArmyCompanion.Reflections do
       "prompt" => row.prompt,
       "captured_at" => iso8601(row.captured_at),
       "stored_at" => iso8601(row.inserted_at),
-      "chars" => String.length(row.text || "")
+      "chars" => String.length(row.text || ""),
+      "answer" => answer_view(row)
+    }
+  end
+
+  # The answer, in the same shape whether it exists or not: a reader never has to
+  # ask whether a key is there. `model` is the model that answered, which is not
+  # necessarily the one that was configured — and `answered_at` is when the store
+  # learned it, not when the model produced it, because only the first is a fact
+  # we hold.
+  defp answer_view(%Reflection{} = row) do
+    %{
+      "state" => row.answer_state || "pending",
+      "text" => row.answer_text,
+      "model" => row.answer_model,
+      "answered_at" => iso8601(row.answered_at),
+      "promise_flagged" => row.promise_flagged == true,
+      "error" => row.answer_error
     }
   end
 
@@ -164,6 +226,7 @@ defmodule BotArmyCompanion.Reflections do
   def explain(:bad_prompt), do: "the prompt must be text when it is sent"
   def explain(:not_a_map), do: "a reflection arrives as an object with text in it"
   def explain(:bad_limit), do: "a limit must be a whole number between 1 and #{@max_limit}"
+  def explain(:bad_answer_state), do: "an answer state must be one the store knows"
   def explain(:not_found), do: "there is no reflection with that id"
   def explain(:invalid), do: "the store refused that reflection"
   def explain(:store_failed), do: "the reflection store could not be reached"
