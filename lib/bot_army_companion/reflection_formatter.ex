@@ -42,7 +42,7 @@ defmodule BotArmyCompanion.ReflectionFormatter do
     {:ok, content}
   rescue
     e ->
-      Logger.error("reflection_formatter error: #{inspect(e)}")
+      Logger.error("reflection_formatter error: #{BotArmyCompanion.Private.describe(e)}")
       {:error, "Failed to format reflection"}
   end
 

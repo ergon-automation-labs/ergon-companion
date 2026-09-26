@@ -107,14 +107,19 @@ defmodule BotArmyCompanion.ReflectionsDbTest do
       assert row == stored
     end
 
-    test "an unknown or malformed id is not found, and does not crash" do
+    test "a well-formed id the store does not hold is not found" do
       assert {:error, :not_found} =
                Reflections.get("6f6e2f7c-1a2b-4c3d-8e9f-0a1b2c3d4e5f")
+    end
 
-      assert {:error, :not_found} = Reflections.get("not-a-uuid")
-      assert {:error, :not_found} = Reflections.get("")
-      assert {:error, :not_found} = Reflections.get(nil)
-      assert {:error, :not_found} = Reflections.get(42)
+    test "an absent or malformed id never becomes a claim about the store" do
+      # These three used to answer `:not_found` — a statement about what the
+      # database holds, made without asking it. They are different facts and the
+      # store is never touched to learn them.
+      assert {:error, :missing_id} = Reflections.get(nil)
+      assert {:error, :missing_id} = Reflections.get("")
+      assert {:error, :missing_id} = Reflections.get(42)
+      assert {:error, :invalid_id} = Reflections.get("not-a-uuid")
     end
 
     test "the limit is honoured, and a bad one is refused rather than defaulted" do

@@ -4,7 +4,9 @@ defmodule BotArmyCompanion.Wins do
   """
 
   require Logger
+
   alias BotArmyCompanion.ParaClient
+  alias BotArmyCompanion.Private
 
   @daily_log_path "projects/Bot Army/progress/DAILY_LOG.md"
   # Hypothesized PARA path
@@ -89,11 +91,11 @@ defmodule BotArmyCompanion.Wins do
         |> Enum.map(fn task -> "Completed task: #{task["title"]}" end)
 
       {:ok, response} ->
-        Logger.warning("[Wins] Unexpected GTD response: #{inspect(response)}")
+        Logger.warning("[Wins] Unexpected GTD response: #{Private.describe(response)}")
         []
 
       {:error, reason} ->
-        Logger.warning("[Wins] GTD request failed: #{inspect(reason)}")
+        Logger.warning("[Wins] GTD request failed: #{Private.describe(reason)}")
         []
     end
   end

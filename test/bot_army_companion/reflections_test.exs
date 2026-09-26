@@ -145,6 +145,9 @@ defmodule BotArmyCompanion.ReflectionsTest do
         :not_a_map,
         :bad_limit,
         :not_found,
+        :missing_id,
+        :invalid_id,
+        :bad_answer_state,
         :invalid,
         :store_failed
       ]
@@ -154,6 +157,12 @@ defmodule BotArmyCompanion.ReflectionsTest do
         assert is_binary(sentence)
         assert sentence != ""
       end
+
+      # Three facts, three sentences: a caller that sent nothing, a caller that
+      # sent something that cannot be an id, and a caller asking for a row that
+      # is not there must not all hear the same answer.
+      assert Reflections.explain(:missing_id) != Reflections.explain(:invalid_id)
+      assert Reflections.explain(:invalid_id) != Reflections.explain(:not_found)
     end
 
     test "the ceiling is named in the sentence that refuses it" do
@@ -163,6 +172,26 @@ defmodule BotArmyCompanion.ReflectionsTest do
 
     test "an unknown reason still produces a sentence rather than a crash" do
       assert Reflections.explain(:something_new) == "the reflection store could not answer"
+    end
+  end
+
+  describe "get/1 — an id that never reached the store" do
+    test "no id at all is a missing id, not a missing reflection" do
+      assert Reflections.get(nil) == {:error, :missing_id}
+      assert Reflections.get("") == {:error, :missing_id}
+      assert Reflections.get(42) == {:error, :missing_id}
+      assert Reflections.get(%{}) == {:error, :missing_id}
+    end
+
+    test "something that cannot be an id is refused as an id, without asking the store" do
+      assert Reflections.get("not-a-uuid") == {:error, :invalid_id}
+      assert Reflections.get("6f6e2f7c1a2b4c3d8e9f0a1b2c3d4e5f") == {:error, :invalid_id}
+    end
+
+    test "the two refusals do not say the same thing" do
+      refute Reflections.explain(:missing_id) == Reflections.explain(:invalid_id)
+      assert Reflections.explain(:missing_id) =~ "required"
+      assert Reflections.explain(:invalid_id) =~ "uuid"
     end
   end
 

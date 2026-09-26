@@ -163,21 +163,26 @@ defmodule BotArmyCompanion.Reflections do
   @doc """
   One reflection by id.
 
-  A missing or malformed id is `{:error, :not_found}` — never a crash, and never
-  a nil-shaped "found".
+  Three different things used to answer "no such reflection", and they are not
+  the same fact. A request that carried no id, and a request that carried
+  something which cannot be an id, never reached the store at all — answering
+  those `:not_found` was a claim about the store's contents that nobody had
+  checked. Only a well-formed id the store does not hold is a `:not_found`.
   """
   def get(id) when is_binary(id) do
-    if Regex.match?(@uuid, id) do
-      case Repo.get(Reflection, id) do
-        nil -> {:error, :not_found}
-        row -> {:ok, view(row)}
-      end
-    else
-      {:error, :not_found}
+    case take_id(id) do
+      {:ok, uuid} ->
+        case Repo.get(Reflection, uuid) do
+          nil -> {:error, :not_found}
+          row -> {:ok, view(row)}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  def get(_other), do: {:error, :not_found}
+  def get(_other), do: {:error, :missing_id}
 
   @doc """
   A reflection, as the wire sees it.
@@ -228,6 +233,8 @@ defmodule BotArmyCompanion.Reflections do
   def explain(:bad_limit), do: "a limit must be a whole number between 1 and #{@max_limit}"
   def explain(:bad_answer_state), do: "an answer state must be one the store knows"
   def explain(:not_found), do: "there is no reflection with that id"
+  def explain(:missing_id), do: "a reflection id is required"
+  def explain(:invalid_id), do: "a reflection id is a uuid, and that is not one"
   def explain(:invalid), do: "the store refused that reflection"
   def explain(:store_failed), do: "the reflection store could not be reached"
   def explain(_other), do: "the reflection store could not answer"
@@ -277,6 +284,15 @@ defmodule BotArmyCompanion.Reflections do
       _other ->
         {:ok, nil}
     end
+  end
+
+  # Absent and malformed are different refusals on purpose: the caller that sent
+  # nothing can fix its call, while the caller that sent a UUID-shaped id learns
+  # only that the store does not have it.
+  defp take_id(""), do: {:error, :missing_id}
+
+  defp take_id(id) do
+    if Regex.match?(@uuid, id), do: {:ok, id}, else: {:error, :invalid_id}
   end
 
   defp take_limit(nil), do: {:ok, @default_limit}

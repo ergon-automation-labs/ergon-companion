@@ -7,7 +7,9 @@ defmodule BotArmyCompanion.ReflectionHistory do
   """
 
   require Logger
+
   alias BotArmyCompanion.ParaClient
+  alias BotArmyCompanion.Private
 
   @doc """
   Fetch and summarize the last N reflections for a given angle.
@@ -80,7 +82,9 @@ defmodule BotArmyCompanion.ReflectionHistory do
          }}
 
       error ->
-        Logger.error("ReflectionHistory: Failed to fetch prior reflections: #{inspect(error)}")
+        Logger.error(
+          "ReflectionHistory: Failed to fetch prior reflections: #{Private.describe(error)}"
+        )
 
         # Graceful degradation: return empty summary instead of failing
         {:ok,

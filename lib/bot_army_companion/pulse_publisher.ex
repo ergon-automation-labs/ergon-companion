@@ -132,5 +132,4 @@ defmodule BotArmyCompanion.PulsePublisher do
       _ -> :nominal
     end
   end
-
 end

@@ -7,6 +7,8 @@ defmodule BotArmyCompanion.ParaClient do
 
   require Logger
 
+  alias BotArmyCompanion.Private
+
   @doc """
   Read a file from PARA.
 
@@ -35,11 +37,11 @@ defmodule BotArmyCompanion.ParaClient do
         end
 
       {:ok, response} ->
-        Logger.error("ParaClient.read_file: Unexpected response: #{inspect(response)}")
+        Logger.error("ParaClient.read_file: Unexpected response: #{Private.describe(response)}")
         {:error, "Invalid response format"}
 
       error ->
-        Logger.error("ParaClient.read_file: NATS error: #{inspect(error)}")
+        Logger.error("ParaClient.read_file: NATS error: #{Private.describe(error)}")
         error
     end
   end
@@ -63,11 +65,14 @@ defmodule BotArmyCompanion.ParaClient do
         {:ok, entries}
 
       {:ok, response} ->
-        Logger.error("ParaClient.list_directory: Unexpected response: #{inspect(response)}")
+        Logger.error(
+          "ParaClient.list_directory: Unexpected response: #{Private.describe(response)}"
+        )
+
         {:error, "Invalid response format"}
 
       error ->
-        Logger.error("ParaClient.list_directory: NATS error: #{inspect(error)}")
+        Logger.error("ParaClient.list_directory: NATS error: #{Private.describe(error)}")
         error
     end
   end
@@ -106,11 +111,11 @@ defmodule BotArmyCompanion.ParaClient do
         end
 
       {:ok, response} ->
-        Logger.error("ParaClient.write_file: Unexpected response: #{inspect(response)}")
+        Logger.error("ParaClient.write_file: Unexpected response: #{Private.describe(response)}")
         {:error, "Invalid response format"}
 
       error ->
-        Logger.error("ParaClient.write_file: NATS error: #{inspect(error)}")
+        Logger.error("ParaClient.write_file: NATS error: #{Private.describe(error)}")
         error
     end
   end
@@ -121,7 +126,7 @@ defmodule BotArmyCompanion.ParaClient do
   Returns {:ok, results} or {:error, reason}.
   """
   def search(query, timeout_ms \\ 5_000) do
-    Logger.debug("ParaClient.search: #{query}")
+    Logger.debug("ParaClient.search: #{Private.describe(query)}")
 
     payload = %{
       "query" => query
@@ -133,11 +138,11 @@ defmodule BotArmyCompanion.ParaClient do
         {:ok, results}
 
       {:ok, response} ->
-        Logger.error("ParaClient.search: Unexpected response: #{inspect(response)}")
+        Logger.error("ParaClient.search: Unexpected response: #{Private.describe(response)}")
         {:error, "Invalid response format"}
 
       error ->
-        Logger.error("ParaClient.search: NATS error: #{inspect(error)}")
+        Logger.error("ParaClient.search: NATS error: #{Private.describe(error)}")
         error
     end
   end

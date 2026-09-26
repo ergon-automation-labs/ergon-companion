@@ -9,6 +9,7 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
   require Logger
 
   alias BotArmyLibraryRuntime.NATS.Publisher
+  alias BotArmyCompanion.Private
   alias BotArmyCompanion.Wins
   alias BotArmyCompanion.ReflectionFormatter
 
@@ -32,12 +33,12 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
             {:ok, reflection}
 
           {:error, reason} ->
-            Logger.error("Companion reflection generation failed: #{inspect(reason)}")
+            Logger.error("Companion reflection generation failed: #{Private.describe(reason)}")
             {:error, reason}
         end
 
       {:error, reason} ->
-        Logger.error("Companion reflection state gathering failed: #{inspect(reason)}")
+        Logger.error("Companion reflection state gathering failed: #{Private.describe(reason)}")
         {:error, reason}
     end
   end
@@ -224,10 +225,12 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
         :ok
 
       error ->
-        Logger.warning("audit_stale_dates: para.fs.write failed (non-fatal): #{inspect(error)}")
+        Logger.warning(
+          "audit_stale_dates: para.fs.write failed (non-fatal): #{Private.describe(error)}"
+        )
     end
   rescue
-    e -> Logger.warning("audit_stale_dates: failed (non-fatal): #{inspect(e)}")
+    e -> Logger.warning("audit_stale_dates: failed (non-fatal): #{Private.describe(e)}")
   end
 
   defp format_date_audit([]) do
@@ -411,18 +414,18 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
   defp llm_unavailable_response?(_), do: false
 
   defp request_bridge_chat(query) do
-    Logger.debug("request_bridge_chat: Starting with query: #{inspect(query)}")
+    Logger.debug("request_bridge_chat: starting (#{Private.describe(query)})")
 
     payload = %{
       "query" => query,
       "context_id" => "companion-heartbeat-#{System.os_time(:second)}"
     }
 
-    Logger.debug("request_bridge_chat: Payload: #{inspect(payload)}")
+    Logger.debug("request_bridge_chat: payload (#{Private.describe(payload)})")
 
     case call_nats_subject("bridge.chat", payload, 35_000) do
       {:ok, response} ->
-        Logger.debug("request_bridge_chat: Got NATS response: #{inspect(response)}")
+        Logger.debug("request_bridge_chat: got a response (#{Private.describe(response)})")
 
         # Handle both sync (direct response) and async (job_id) responses
         case response do
@@ -440,7 +443,8 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
             poll_job_result(job_id, 0, 60)
 
           _ ->
-            Logger.error("bridge.chat unexpected response shape: #{inspect(response)}")
+            Logger.error("bridge.chat unexpected response shape: #{Private.describe(response)}")
+
             {:error, "Invalid response format from bridge.chat"}
         end
 
@@ -496,7 +500,7 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
   defp extract_result_text(text) when is_binary(text), do: {:ok, text}
 
   defp extract_result_text(result) do
-    Logger.error("extract_result_text: Unexpected result format: #{inspect(result)}")
+    Logger.error("extract_result_text: Unexpected result format: #{Private.describe(result)}")
     {:error, "Invalid result format from job"}
   end
 
@@ -532,7 +536,7 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
   end
 
   defp write_to_para(reflection) do
-    Logger.debug("write_to_para: Starting with reflection: #{inspect(reflection)}")
+    Logger.debug("write_to_para: formatting a reflection (#{Private.describe(reflection)})")
 
     angle = Map.get(reflection, :angle, "unknown")
     timestamp = Map.get(reflection, :timestamp, DateTime.utc_now() |> DateTime.to_iso8601())
@@ -573,7 +577,10 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
         {:error, "para.fs.write rejected: #{reason}"}
 
       {:ok, response} ->
-        Logger.info("para.fs.write succeeded for #{relative_path}: #{inspect(response)}")
+        Logger.info(
+          "para.fs.write succeeded for #{relative_path} (#{Private.describe(response)})"
+        )
+
         {:ok, "written"}
 
       {:error, "No responders available for para.fs.write"} ->

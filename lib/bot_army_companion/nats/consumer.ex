@@ -13,6 +13,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
   use GenServer
   require Logger
 
+  alias BotArmyCompanion.Private
   alias BotArmyCompanion.ReflectionAnswer
   alias BotArmyCompanion.Reflections
   alias BotArmyLibraryRuntime.NATS.Reply
@@ -292,7 +293,10 @@ defmodule BotArmyCompanion.NATS.Consumer do
 
         {:reply, result} ->
           # Fallback for any other reply format
-          Logger.warning("Unexpected heartbeat handler response format: #{inspect(result)}")
+          Logger.warning(
+            "Unexpected heartbeat handler response format: #{Private.describe(result)}"
+          )
+
           Reply.error("Unexpected response format", :internal_error)
       end
 
@@ -307,12 +311,12 @@ defmodule BotArmyCompanion.NATS.Consumer do
 
       {:error, reason} ->
         Logger.warning(
-          "Failed to get NATS connection to reply to companion.heartbeat: #{inspect(reason)}"
+          "Failed to get NATS connection to reply to companion.heartbeat: #{Private.describe(reason)}"
         )
     end
   rescue
     e ->
-      Logger.error("Error handling companion.heartbeat request: #{inspect(e)}")
+      Logger.error("Error handling companion.heartbeat request: #{Private.describe(e)}")
   end
 
   defp handle_reflection_request(msg) do
@@ -343,7 +347,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
     end
   rescue
     e ->
-      Logger.error("Error handling companion.reflection request: #{inspect(e)}")
+      Logger.error("Error handling companion.reflection request: #{Private.describe(e)}")
   end
 
   defp execute_reflection_task(job_id) do
@@ -354,7 +358,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
         Logger.info("Reflection task #{job_id} completed successfully")
 
       {:error, reason} ->
-        Logger.error("Reflection task #{job_id} failed: #{inspect(reason)}")
+        Logger.error("Reflection task #{job_id} failed: #{Private.describe(reason)}")
     end
   end
 
@@ -367,13 +371,14 @@ defmodule BotArmyCompanion.NATS.Consumer do
           Reply.ok(%{"observations" => observations})
 
         {:error, reason} ->
-          Reply.error(inspect(reason), :list_failed)
+          Logger.warning("Observations were not readable: #{Private.describe(reason)}")
+          Reply.error("the observations could not be read", :list_failed)
       end
 
     reply(msg, response)
   rescue
     e ->
-      Logger.error("Error handling companion.observations.list request: #{inspect(e)}")
+      Logger.error("Error handling companion.observations.list request: #{Private.describe(e)}")
   end
 
   defp handle_observations_read_request(msg) do
@@ -397,7 +402,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
     reply(msg, response)
   rescue
     e ->
-      Logger.error("Error handling companion.observations.read request: #{inspect(e)}")
+      Logger.error("Error handling companion.observations.read request: #{Private.describe(e)}")
   end
 
   defp handle_observations_reply_request(msg) do
@@ -420,7 +425,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
     reply(msg, response)
   rescue
     e ->
-      Logger.error("Error handling companion.observations.reply request: #{inspect(e)}")
+      Logger.error("Error handling companion.observations.reply request: #{Private.describe(e)}")
   end
 
   # --- her captured reflections ----------------------------------------------
@@ -443,7 +448,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
         end
 
       {:error, reason} ->
-        Logger.warning("Could not decode a captured reflection: #{inspect(reason)}")
+        Logger.warning("Could not decode a captured reflection: #{Private.describe(reason)}")
     end
 
     :ok
@@ -538,7 +543,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
     Reflections.capture(payload, answer_state: initial_answer_state())
   catch
     kind, reason ->
-      Logger.error("Reflection store failed (#{kind}): #{inspect(reason)}")
+      Logger.error("Reflection store failed (#{kind}): #{Private.describe(reason)}")
       {:error, :store_failed}
   end
 
@@ -546,7 +551,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
     Reflections.list(limit)
   catch
     kind, reason ->
-      Logger.error("Reflection read failed (#{kind}): #{inspect(reason)}")
+      Logger.error("Reflection read failed (#{kind}): #{Private.describe(reason)}")
       {:error, :store_failed}
   end
 
@@ -554,7 +559,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
     Reflections.get(id)
   catch
     kind, reason ->
-      Logger.error("Reflection read failed (#{kind}): #{inspect(reason)}")
+      Logger.error("Reflection read failed (#{kind}): #{Private.describe(reason)}")
       {:error, :store_failed}
   end
 
@@ -656,7 +661,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
         :ok
 
       {:error, reason} ->
-        Logger.warning("Failed to decode companion.presence message: #{inspect(reason)}")
+        Logger.warning("Failed to decode companion.presence message: #{Private.describe(reason)}")
     end
   end
 
@@ -666,7 +671,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
         route_message(decoded_message, msg.topic)
 
       {:error, reason} ->
-        Logger.warning("Failed to decode message from #{msg.topic}: #{inspect(reason)}")
+        Logger.warning("Failed to decode message from #{msg.topic}: #{Private.describe(reason)}")
     end
   end
 
