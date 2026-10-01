@@ -75,7 +75,13 @@ defmodule BotArmyCompanion.ReflectionAnswer do
     # The lane's own life: the llm bot holds a finished job for an hour. See the
     # moduledoc, and `config/config.exs` for the value production actually runs.
     budget_ms: 3_600_000,
-    poll_ms: 2_000,
+    # How long we are willing to wait *to be told* a job ended. The llm bot rings
+    # `events.llm.job.completed` when a job finishes, so this is the fallback for a
+    # bell that is lost and the whole cadence against an llm bot older than the
+    # bell. Ten seconds makes a lost bell cheap — a hundredth of the asks a
+    # two-second cadence made over an hour — while staying a small fraction of the
+    # narration's 900 s budget.
+    poll_ms: 10_000,
     submit_timeout_ms: 20_000,
     status_timeout_ms: 10_000,
     promise_retries: 1,

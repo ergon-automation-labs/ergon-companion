@@ -72,6 +72,18 @@ defmodule BotArmyCompanion.NATS.ConsumerSubjectsTest do
     assert types["companion.reflections.capture"] == :request_reply
   end
 
+  test "the llm bot's bell is advertised, and subscribed to" do
+    # The bell is what ends an hour-long wait for a slow local model. A subject
+    # that is advertised but never subscribed to is the failure this whole file
+    # exists for: the llm bot would ring, nobody would hear it, and every waiter
+    # would fall back to asking on its own cadence without anyone knowing why.
+    advertised = Enum.map(Consumer.subjects(), & &1.subject)
+
+    assert "events.llm.job.completed" in advertised
+    assert "events.llm.job.completed" in Consumer.business_subjects()
+    refute "llm.job.completed" in advertised
+  end
+
   test "the party's ask is advertised on the wire subject rpg actually publishes" do
     # rpg derives `events.rpg.narration.your_turn` from its event name; a
     # subscription written as the event name would be a subject nobody publishes

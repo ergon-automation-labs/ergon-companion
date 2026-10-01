@@ -42,11 +42,18 @@ defmodule BotArmyCompanion.ReflectionAnswer.Llm.Nats do
   The real model, over the fleet's bus.
 
   The uncensored lane is a *local* model and can take minutes, so this asks for a
-  background job (`"async" => true`) and polls `llm.job.status` — the pattern the
-  fleet documents for long generations. A blocking request would force this
+  background job (`"async" => true`) and waits on `llm.job.status` — the pattern
+  the fleet documents for long generations. A blocking request would force this
   module to invent a deadline small enough to lose the answer.
 
-  Two things here are load-bearing and easy to get wrong later:
+  It waits *on* the status rather than for it: the llm bot rings
+  `events.llm.job.completed` when a job ends, and while it is pending this process
+  sits in `receive` instead of asking every two seconds for an hour. So
+  `:poll_ms` is how long we are willing to be patient, not how often we ask — and
+  against an llm bot that does not ring (an older release), the patience is also
+  the polling cadence, so the behaviour degrades to exactly what it was.
+
+  Three things here are load-bearing and easy to get wrong later:
 
   * **The model that answers is not the model that was configured.** The reply
     carries `model_used`, and it is stored, because a pillar that says `27B`
@@ -55,12 +62,17 @@ defmodule BotArmyCompanion.ReflectionAnswer.Llm.Nats do
     retried until the budget runs out; only repeated failures (or the budget)
     give up. The first timeout means "still working", which is the normal case
     for a minute-long generation.
+  * **The bell wakes, it does not inform.** A bell (or any other bell, or the
+    patience running out) ends the wait and the job's status is *read*, never
+    assumed from the event: a bell that arrived before the result was stored
+    would otherwise be treated as the result.
   """
 
   @behaviour BotArmyCompanion.ReflectionAnswer.Llm
 
   require Logger
 
+  alias BotArmyCompanion.JobBell
   alias BotArmyLibraryRuntime.NATS.Publisher
 
   # How many status polls may fail in a row before we stop believing the job is
@@ -82,13 +94,29 @@ defmodule BotArmyCompanion.ReflectionAnswer.Llm.Nats do
     }
 
     case submit(payload, opts) do
-      {:ok, job_id} -> poll(job_id, deadline, opts, 0)
+      {:ok, job_id} -> await(job_id, deadline, opts)
       {:error, code} -> {:error, code}
     end
   end
 
+  # A registry that is not running (a hermetic test, an eval) is not a failure:
+  # the waiter polls as it always did, only slower.
+  defp await(job_id, deadline, opts) do
+    JobBell.watch(job_id)
+
+    try do
+      poll(job_id, deadline, opts, 0)
+    after
+      JobBell.unwatch(job_id)
+    end
+  end
+
+  # Injectable so a test can drive the whole wait — submit, pending, bell — with
+  # no broker and no model.
+  defp publisher, do: Application.get_env(:bot_army_companion, :nats_publisher, Publisher)
+
   defp submit(payload, opts) do
-    case Publisher.request(Keyword.fetch!(opts, :subject), payload,
+    case publisher().request(Keyword.fetch!(opts, :subject), payload,
            timeout_ms: Keyword.fetch!(opts, :submit_timeout_ms)
          ) do
       {:ok, %{"job_id" => job_id}} when is_binary(job_id) -> {:ok, job_id}
@@ -113,21 +141,32 @@ defmodule BotArmyCompanion.ReflectionAnswer.Llm.Nats do
       true ->
         case status(job_id, opts) do
           {:done, result} -> take_result(result)
-          :pending -> sleep_then_poll(job_id, deadline, opts, 0)
+          :pending -> wait_then_poll(job_id, deadline, opts, 0)
           :failed -> {:error, :model_failed}
           :missing -> {:error, :unavailable}
-          :unreachable -> sleep_then_poll(job_id, deadline, opts, errors + 1)
+          :unreachable -> wait_then_poll(job_id, deadline, opts, errors + 1)
         end
     end
   end
 
-  defp sleep_then_poll(job_id, deadline, opts, errors) do
-    Process.sleep(Keyword.fetch!(opts, :poll_ms))
+  # The wait between status reads. A bell for this job ends it; so does a bell for
+  # somebody else's (draining it costs one status request and keeps a neighbour's
+  # message from sitting in this mailbox until the next model finishes); so does
+  # the patience running out.
+  defp wait_then_poll(job_id, deadline, opts, errors) do
+    wait_ms = Keyword.fetch!(opts, :poll_ms)
+
+    receive do
+      {:job_bell, _job_id} -> :ok
+    after
+      wait_ms -> :ok
+    end
+
     poll(job_id, deadline, opts, errors)
   end
 
   defp status(job_id, opts) do
-    case Publisher.request(
+    case publisher().request(
            Keyword.fetch!(opts, :status_subject),
            %{"job_id" => job_id},
            timeout_ms: Keyword.fetch!(opts, :status_timeout_ms)

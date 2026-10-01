@@ -27,7 +27,12 @@ defmodule BotArmyCompanion.Application do
     Application.put_env(:bot_army_library_runtime, :config_data, config_data)
 
     children =
-      []
+      [
+        # Waiters for llm bot jobs register here; the consumer rings it when a
+        # bell arrives. Not environment-gated: it is a registry with no state of
+        # its own, and a test asserting on the bell needs it running.
+        BotArmyCompanion.JobBell
+      ]
       |> maybe_add_repo()
       |> maybe_add_pulse_publisher()
       |> maybe_add_workers()
