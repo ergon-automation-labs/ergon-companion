@@ -50,6 +50,12 @@ defmodule BotArmyCompanion.ReflectionAnswerLlmTest do
 
     defp reply(:pending, _job_id), do: {:ok, %{"ok" => true, "status" => "pending"}}
 
+    # The bridge's word for a running job. The llm bot does not use it, but the
+    # waiter must survive it: a bot that answers in a word we do not know is
+    # still answering.
+    defp reply(:processing, _job_id),
+      do: {:ok, %{"ok" => true, "status" => "processing"}}
+
     defp reply(:bell, job_id) do
       send(self(), {:job_bell, job_id})
       {:ok, %{"ok" => true, "status" => "pending"}}
@@ -115,6 +121,16 @@ defmodule BotArmyCompanion.ReflectionAnswerLlmTest do
   test "with no bell at all the waiter asks on its own cadence" do
     # An llm bot older than the bell: the patience is also the polling cadence.
     script([:pending, :pending, :completed])
+
+    assert {:ok, %{text: "the words"}} = answer(poll_ms: 5)
+  end
+
+  test "a status word this lane has never seen is a job that is running, not a bus that is down" do
+    # Three unreadable reads in a row end the wait. A *readable* status in an
+    # unknown word must not, or a second bot's vocabulary becomes a failure: the
+    # bridge says `processing` where the llm bot says `pending`, and the legacy
+    # poller failed a minute of real work over exactly that word.
+    script([:processing, :processing, :processing, :completed])
 
     assert {:ok, %{text: "the words"}} = answer(poll_ms: 5)
   end

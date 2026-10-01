@@ -83,7 +83,16 @@ defmodule BotArmyCompanion.ReflectionAnswer do
     # narration's 900 s budget.
     poll_ms: 10_000,
     submit_timeout_ms: 20_000,
-    status_timeout_ms: 10_000,
+    # How long one status read may take. The read is served from an ETS table and
+    # normally answers in under a millisecond (measured 2026-10-01: eight reads in
+    # a row, 540–846 µs). But the companion runs beside the thing that saturates
+    # the machine — a local uncensored generation — and under that load the same
+    # read took 9.6 s, once more than 20 s. A status read that fails three times in
+    # a row is treated as "nobody is answering", so ten seconds left no room: a
+    # finished job could be thrown away by the load the answer itself created.
+    # Thirty seconds costs nothing when the lane is fast and buys the margin the
+    # companion's own workload needs.
+    status_timeout_ms: 30_000,
     promise_retries: 1,
     llm: BotArmyCompanion.ReflectionAnswer.Llm.Nats
   ]

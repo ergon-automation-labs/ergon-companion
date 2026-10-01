@@ -61,7 +61,9 @@ defmodule BotArmyCompanion.ReflectionAnswer.Llm.Nats do
   * **A pending job is not a failure.** A status request that times out is
     retried until the budget runs out; only repeated failures (or the budget)
     give up. The first timeout means "still working", which is the normal case
-    for a minute-long generation.
+    for a minute-long generation. What a reply *means* is not decided here but in
+    `BotArmyCompanion.JobStatus`, which both this lane and the legacy bridge
+    poller ask — the two bots use different words for a running job.
   * **The bell wakes, it does not inform.** A bell (or any other bell, or the
     patience running out) ends the wait and the job's status is *read*, never
     assumed from the event: a bell that arrived before the result was stored
@@ -73,6 +75,7 @@ defmodule BotArmyCompanion.ReflectionAnswer.Llm.Nats do
   require Logger
 
   alias BotArmyCompanion.JobBell
+  alias BotArmyCompanion.JobStatus
   alias BotArmyLibraryRuntime.NATS.Publisher
 
   # How many status polls may fail in a row before we stop believing the job is
@@ -165,22 +168,31 @@ defmodule BotArmyCompanion.ReflectionAnswer.Llm.Nats do
     poll(job_id, deadline, opts, errors)
   end
 
+  # The words a job may be answered in belong to `JobStatus` — the same module the
+  # legacy bridge poller asks, because the bridge says `processing` where the llm
+  # bot says `pending`. This function only says what *this* lane does about them.
   defp status(job_id, opts) do
-    case publisher().request(
-           Keyword.fetch!(opts, :status_subject),
-           %{"job_id" => job_id},
-           timeout_ms: Keyword.fetch!(opts, :status_timeout_ms)
-         ) do
-      {:ok, %{"ok" => true, "status" => "completed", "result" => result}} -> {:done, result}
-      {:ok, %{"ok" => true, "status" => "failed"}} -> :failed
-      {:ok, %{"ok" => true, "status" => "pending"}} -> :pending
-      {:ok, %{"ok" => false}} -> :missing
-      {:ok, _other} -> :unreachable
+    case request_status(job_id, opts) do
+      {:ok, reply} -> status_step(JobStatus.step(reply))
       {:error, _other} -> :unreachable
     end
-  catch
-    _kind, _reason -> :unreachable
   end
+
+  defp request_status(job_id, opts) do
+    publisher().request(
+      Keyword.fetch!(opts, :status_subject),
+      %{"job_id" => job_id},
+      timeout_ms: Keyword.fetch!(opts, :status_timeout_ms)
+    )
+  catch
+    _kind, _reason -> {:error, :unreachable}
+  end
+
+  defp status_step({:done, result}), do: {:done, result}
+  defp status_step({:failed, _reason}), do: :failed
+  defp status_step(:wait), do: :pending
+  defp status_step(:missing), do: :missing
+  defp status_step(:unreadable), do: :unreachable
 
   # A completed job whose result carries no words is not an answer. Storing an
   # empty string would make the row say "answered" about silence.

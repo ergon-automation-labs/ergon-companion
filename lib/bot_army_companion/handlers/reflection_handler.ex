@@ -9,6 +9,7 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
   require Logger
 
   alias BotArmyLibraryRuntime.NATS.Publisher
+  alias BotArmyCompanion.JobStatus
   alias BotArmyCompanion.Private
   alias BotArmyCompanion.Wins
   alias BotArmyCompanion.ReflectionFormatter
@@ -469,26 +470,46 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
     payload = %{"job_id" => job_id}
 
     case call_nats_subject("bridge.job.status", payload, 5_000) do
-      {:ok, %{"ok" => true, "status" => "completed", "result" => result}} ->
+      {:ok, reply} -> job_status_step(reply, job_id, attempt, max_attempts)
+      error -> retry_job_status(error, job_id, attempt, max_attempts)
+    end
+  end
+
+  # What a status reply *means* is not decided here: `JobStatus` owns the words,
+  # because the bridge says `processing` where the llm bot says `pending`, and
+  # reading one bot's vocabulary against the other bot's replies is what failed
+  # this lane (2026-10-01 06:02) — a running job logged as an error, once a
+  # second, until the reflection gave up on work that was being done.
+  defp job_status_step(reply, job_id, attempt, max_attempts) do
+    case JobStatus.step(reply) do
+      {:done, result} ->
         Logger.debug("poll_job_result: Job completed after #{attempt + 1}s")
         extract_result_text(result)
 
-      {:ok, %{"ok" => false, "error" => error}} ->
-        Logger.error("poll_job_result: Job error: #{error}")
-        {:error, "Job failed: #{error}"}
+      {:failed, error} ->
+        Logger.error("poll_job_result: Job error: #{Private.describe(error)}")
+        {:error, "Job failed: #{Private.describe(error)}"}
 
-      {:ok, %{"status" => "pending"}} ->
+      :wait ->
         Logger.debug(
-          "poll_job_result: Job still pending (attempt #{attempt + 1}/#{max_attempts})"
+          "poll_job_result: Job still running (attempt #{attempt + 1}/#{max_attempts})"
         )
 
         poll_job_result(job_id, attempt + 1, max_attempts)
 
-      error ->
-        Logger.error("poll_job_result: Status check error: #{inspect(error)}")
-        # Retry on error
-        poll_job_result(job_id, attempt + 1, max_attempts)
+      :missing ->
+        Logger.error("poll_job_result: the bridge does not know job #{job_id}")
+        {:error, "Job failed: the bridge does not know that job"}
+
+      :unreadable ->
+        retry_job_status(reply, job_id, attempt, max_attempts)
     end
+  end
+
+  defp retry_job_status(reason, job_id, attempt, max_attempts) do
+    Logger.error("poll_job_result: Status check error: #{Private.describe(reason)}")
+    # Retry on error
+    poll_job_result(job_id, attempt + 1, max_attempts)
   end
 
   # Extract text from various result formats
