@@ -71,4 +71,15 @@ defmodule BotArmyCompanion.NATS.ConsumerSubjectsTest do
     assert types["companion.presence"] == :pubsub
     assert types["companion.reflections.capture"] == :request_reply
   end
+
+  test "the party's ask is advertised on the wire subject rpg actually publishes" do
+    # rpg derives `events.rpg.narration.your_turn` from its event name; a
+    # subscription written as the event name would be a subject nobody publishes
+    # to, and the turn would be handed to a narrator that never hears it.
+    advertised = Enum.map(Consumer.subjects(), & &1.subject)
+
+    assert "events.rpg.narration.your_turn" in advertised
+    assert "events.rpg.narration.your_turn" in Consumer.business_subjects()
+    refute "rpg.narration.your_turn" in advertised
+  end
 end

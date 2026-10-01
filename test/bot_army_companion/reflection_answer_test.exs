@@ -189,6 +189,56 @@ defmodule BotArmyCompanion.ReflectionAnswerTest do
     end
   end
 
+  describe "compose/2 — the promise discipline in the caller's own voice" do
+    test "the caller's system prompt is what the model is given" do
+      expect(ReflectionAnswerLlmMock, :answer, fn system, user, _opts ->
+        assert system == "You are a narrator."
+        assert user == "Tell the turn."
+        {:ok, %{text: "Once, in the dark.", model: "test-model"}}
+      end)
+
+      assert {:ok, answered} = ReflectionAnswer.compose("You are a narrator.", "Tell the turn.")
+      assert answered.text =~ "Once"
+      refute answered.promise_flagged
+    end
+
+    test "the retry is the caller's prompt plus the instruction, not the companion's" do
+      expect(ReflectionAnswerLlmMock, :answer, fn _system, _user, _opts ->
+        {:ok, %{text: "I promise I will always tell it.", model: "test-model"}}
+      end)
+
+      expect(ReflectionAnswerLlmMock, :answer, fn system, _user, _opts ->
+        send(self(), {:retry_system, system})
+        {:ok, %{text: "That is what happened.", model: "test-model"}}
+      end)
+
+      assert {:ok, answered} = ReflectionAnswer.compose("You are a narrator.", "Tell the turn.")
+      assert answered.text =~ "That is what happened"
+
+      assert_received {:retry_system, system}
+      assert system =~ "You are a narrator."
+      refute system =~ ReflectionAnswer.system_prompt()
+      assert system =~ "promised"
+    end
+
+    test "a failure in the first answer is the caller's failure code, unchanged" do
+      expect(ReflectionAnswerLlmMock, :answer, fn _s, _u, _o -> {:error, :timeout} end)
+
+      assert {:error, :timeout} = ReflectionAnswer.compose("You are a narrator.", "Tell it.")
+    end
+
+    test "ask/1 asks in the companion's own voice, through the same discipline" do
+      expect(ReflectionAnswerLlmMock, :answer, fn system, _user, _opts ->
+        send(self(), {:ask_system, system})
+        {:ok, %{text: "I hear you.", model: "test-model"}}
+      end)
+
+      assert {:ok, _answered} = ReflectionAnswer.ask(reflection(%{text: "I am tired"}))
+      assert_received {:ask_system, system}
+      assert system == ReflectionAnswer.system_prompt()
+    end
+  end
+
   describe "offer/1 — whether anything is asked at all" do
     test "with answering switched off, nothing is asked and the caller is told" do
       original = Application.get_env(:bot_army_companion, :reflection_answer)

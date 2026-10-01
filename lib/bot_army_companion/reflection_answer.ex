@@ -26,6 +26,16 @@ defmodule BotArmyCompanion.ReflectionAnswer do
   visible rather than hidden. We do not delete a real answer to make a check look
   clean, and we never rewrite her words or the model's to hide one.
 
+  ## One owner for how the companion talks to a model
+
+  The promise check and the retry are not specific to reflections: anything the
+  companion says in its own voice has to keep the same promise not to promise. So
+  the discipline lives in one place, `compose/2`, and the reflection path is one of
+  its callers (`ask/1` is `compose(system_prompt(), prompt_for(row))`).
+  `BotArmyCompanion.PartyNarrator` is the other caller, and it brings its own system
+  prompt — the retry is built from whichever prompt asked the question, because a
+  narrator corrected in the voice of a companion would answer as one.
+
   ## Privacy
 
   Her text is the payload of the request and is never logged. That extends to
@@ -156,18 +166,27 @@ defmodule BotArmyCompanion.ReflectionAnswer do
   end
 
   @doc """
-  Ask the model, with the promise check, without touching the store.
+  Ask the model to answer a reflection, with the promise check, without touching the store.
 
   Returns `{:ok, %{text: …, model: …, promise_flagged: …}}` or `{:error, code}`.
   """
-  def ask(%Reflection{} = row) do
-    user = prompt_for(row)
+  def ask(%Reflection{} = row), do: compose(@system_prompt, prompt_for(row))
 
-    case attempt(user, @system_prompt) do
+  @doc """
+  Ask the model for words, in the caller's own voice.
+
+  The caller brings the system prompt; everything after that is the one promise
+  discipline — check the answer, ask **once** more when it promised, deliver the second
+  answer when there is one and the first, flagged, when there is not.
+
+  Returns `{:ok, %{text: …, model: …, promise_flagged: …}}` or `{:error, code}`.
+  """
+  def compose(system, user) when is_binary(system) and is_binary(user) do
+    case attempt(user, system) do
       {:ok, answered} ->
         case promise_check(answered.text) do
           :clean -> {:ok, %{answered | promise_flagged: false}}
-          {:promise, _patterns} -> retry_without_promise(user, answered)
+          {:promise, _patterns} -> retry_without_promise(system, user, answered)
         end
 
       {:error, code} ->
@@ -178,16 +197,18 @@ defmodule BotArmyCompanion.ReflectionAnswer do
   # Keep the first answer whatever the retry does. A retry that fails is not a
   # reason to lose words the model already produced — it is a reason to say the
   # promise is there.
-  defp retry_without_promise(user, first) do
+  defp retry_without_promise(system, user, first) do
     if config()[:promise_retries] >= 1 do
-      retry_attempt(user, first)
+      retry_attempt(system, user, first)
     else
       {:ok, %{first | promise_flagged: true}}
     end
   end
 
-  defp retry_attempt(user, first) do
-    case attempt(user, @system_prompt <> "\n\n" <> @no_promise_retry) do
+  # The *caller's* prompt plus the instruction, not this module's default: a narrator
+  # corrected in the voice of a companion would answer as one.
+  defp retry_attempt(system, user, first) do
+    case attempt(user, system <> "\n\n" <> @no_promise_retry) do
       {:ok, second} ->
         {:ok, settle(second)}
 

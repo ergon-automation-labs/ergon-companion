@@ -65,6 +65,11 @@ if config_env() == :prod do
     max_reconnect_attempts: 10,
     reconnect_delay_ms: 1000
 
+  # The party name this bot answers to. Deployable without a code change because it is
+  # an identity the fleet hands out (pillar/env), not a decision this bot makes.
+  config :bot_army_companion,
+    bot_id: BotArmyLibraryRuntime.ConfigLoader.get("BOT_ID", "companion_bot")
+
   config :logger,
     level: String.to_atom(BotArmyLibraryRuntime.ConfigLoader.get("LOG_LEVEL", "info"))
 end

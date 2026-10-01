@@ -25,6 +25,12 @@ config :bot_army_companion, :reflection_answer,
 
 config :bot_army_companion, ecto_repos: [BotArmyCompanion.Repo]
 
+# The name this companion answers to in a party: rpg asks a member by name
+# (`rpg.narration.your_turn`), and only the member the turn was handed to may
+# write its words. The fleet names a bot's character after the bot, so this is
+# the name the character rows use too (`BotArmyCompanion.PartyNarrator`).
+config :bot_army_companion, :bot_id, "companion_bot"
+
 config :bot_army_companion, BotArmyCompanion.Repo,
   migration_primary_key: [name: :id, type: :binary_id],
   priv: "priv/repo"

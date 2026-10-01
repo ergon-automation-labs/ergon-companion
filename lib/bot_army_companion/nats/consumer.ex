@@ -13,6 +13,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
   use GenServer
   require Logger
 
+  alias BotArmyCompanion.PartyNarrator
   alias BotArmyCompanion.Private
   alias BotArmyCompanion.ReflectionAnswer
   alias BotArmyCompanion.Reflections
@@ -53,6 +54,12 @@ defmodule BotArmyCompanion.NATS.Consumer do
       subject: "companion.presence",
       type: :pubsub,
       description: "Witness system publishes Eir's chimes (post-tool hook events)"
+    },
+    %{
+      subject: PartyNarrator.subject(),
+      type: :pubsub,
+      description:
+        "rpg hands a turn to the party's narrator (a role a member holds), and the words are ours to write"
     },
     %{
       subject: "companion.reflections.capture",
@@ -683,9 +690,21 @@ defmodule BotArmyCompanion.NATS.Consumer do
       "companion.heartbeat" ->
         BotArmyCompanion.Handlers.HeartbeatHandler.handle_heartbeat(message)
 
+      "rpg.narration.your_turn" ->
+        handle_narration_asked(message)
+
       _ ->
         Logger.debug("Unknown companion event type: #{event} from #{topic}")
     end
+  end
+
+  # rpg asks and does not wait for the words, and the words come from a local model that
+  # can think for minutes, so the ask is handed to a task and the receive loop carries on.
+  # Narrating here would stop every request/reply subject this bot answers for as long as
+  # a model thinks — the heartbeat included.
+  defp handle_narration_asked(message) do
+    Task.start(fn -> PartyNarrator.narrate(message) end)
+    :ok
   end
 
   # Request/reply handlers
