@@ -99,7 +99,10 @@ defmodule BotArmyCompanion.ReflectionAnswerTest do
         assert opts[:max_tokens] == 900
         assert opts[:subject] == "llm.request.chat"
         assert opts[:status_subject] == "llm.job.status"
-        assert is_integer(opts[:budget_ms]) and opts[:budget_ms] > 0
+        # The ceiling is the lane's own life, not a screen's patience: the llm bot
+        # holds a finished job for an hour, so waiting less than that can only
+        # discard an answer the provider already wrote.
+        assert opts[:budget_ms] == 3_600_000
         {:ok, %{text: "noted", model: "test-model"}}
       end)
 

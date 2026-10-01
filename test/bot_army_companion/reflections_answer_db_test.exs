@@ -13,6 +13,7 @@ defmodule BotArmyCompanion.ReflectionsAnswerDbTest do
 
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
   import Mox
 
   @moduletag :stores
@@ -85,10 +86,20 @@ defmodule BotArmyCompanion.ReflectionsAnswerDbTest do
       end)
 
       captured = capture("I did not sleep.")
+
       # The offer succeeded at what it promises: the failure is recorded on the
       # row, where a reader can see it, rather than raised at the caller.
-      assert {:ok, offered} = ReflectionAnswer.offer(captured["id"])
-      assert offered["answer"]["state"] == "failed"
+      log =
+        capture_log(fn ->
+          assert {:ok, offered} = ReflectionAnswer.offer(captured["id"])
+          assert offered["answer"]["state"] == "failed"
+        end)
+
+      # And it is said out loud, with the code: a failure that exists only on a row
+      # nobody is reading is the shape of silence this companion exists to refuse.
+      # Her words stay out of the log, as always.
+      assert log =~ "no answer (timeout)"
+      refute log =~ "I did not sleep."
 
       stored = reload(captured["id"])
       assert stored["answer"]["state"] == "failed"

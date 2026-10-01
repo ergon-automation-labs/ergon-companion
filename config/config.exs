@@ -15,13 +15,18 @@ config :logger_json, :backend, formatter: LoggerJSON.Formatters.DatadogLogger
 # background job and the row carries its state while it runs. `mode: :inline`
 # in test runs it in the calling process, against the mock — nothing here should
 # be able to reach a real model during `mix test`.
+# An uncensored answer is an async job on a local model, and the llm bot keeps a
+# finished job for an hour (`BotArmyLlm.JobStore` @ttl_ms), so the lane's own life
+# is the ceiling — not a screen's patience. A shorter deadline does not make the
+# model faster; it throws away an answer the provider has already written and
+# calls it a failure. The row says `pending` while we wait.
 config :bot_army_companion, :reflection_answer,
   enabled: true,
   mode: :async,
   model_type: "uncensored",
   lane: "interactive",
   max_tokens: 900,
-  budget_ms: 300_000
+  budget_ms: 3_600_000
 
 config :bot_army_companion, ecto_repos: [BotArmyCompanion.Repo]
 

@@ -9,12 +9,20 @@ defmodule BotArmyCompanion.ReflectionAnswer do
 
   ## Why the answer arrives later
 
-  The model is a local, uncensored one. On the only measurement we have it took
-  ~45 seconds to say thirty tokens, so an answer is a background job, and the row
-  says which of four things is true while you are looking at it (`pending`,
-  `answered`, `failed`, `unasked` — see `BotArmyCompanion.Reflection`). A screen
-  that shows a captured reflection can therefore tell the truth about whether an
-  answer is coming, rather than implying one.
+  The model is a local, uncensored one: measured on 2026-10-01 it took 74 s to say
+  one word on `baytout3/qwen3.5-uncensored:9B` and 287 s on the `:27B` variant. An
+  answer is therefore a job, not a call: the request is submitted, the provider
+  hands back a job id, and this polls it. The row says which of four things is
+  true while you are looking at it (`pending`, `answered`, `failed`, `unasked` —
+  see `BotArmyCompanion.Reflection`). A screen that shows a captured reflection
+  can tell the truth about whether an answer is coming, rather than implying one.
+
+  Because the answer is asynchronous, its deadline is the lane's own: the llm bot
+  keeps a finished job for an hour, so that hour is `budget_ms`. Waiting less does
+  not make the model faster — it only discards an answer the provider has already
+  written and names it a failure. Narration is the one caller that says how long
+  it will wait in its own terms, because a table is listening for those words
+  (`BotArmyCompanion.PartyNarrator.budget_ms/0`).
 
   ## The one promise rule
 
@@ -64,7 +72,9 @@ defmodule BotArmyCompanion.ReflectionAnswer do
     model_type: "uncensored",
     lane: "interactive",
     max_tokens: 900,
-    budget_ms: 300_000,
+    # The lane's own life: the llm bot holds a finished job for an hour. See the
+    # moduledoc, and `config/config.exs` for the value production actually runs.
+    budget_ms: 3_600_000,
     poll_ms: 2_000,
     submit_timeout_ms: 20_000,
     status_timeout_ms: 10_000,
@@ -149,6 +159,7 @@ defmodule BotArmyCompanion.ReflectionAnswer do
 
       row ->
         outcome = ask(row)
+        announce(row, outcome)
         record(row, outcome)
     end
   catch
@@ -159,6 +170,16 @@ defmodule BotArmyCompanion.ReflectionAnswer do
       Logger.error("Reflection answer failed (#{describe_crash(kind, reason)})")
       {:error, :unavailable}
   end
+
+  # The row records the outcome; the log says out loud that we looked. A failed
+  # answer used to be visible only to whoever read the row, which is exactly the
+  # shape of silence this companion exists to refuse. The code travels, never the
+  # text — the code cannot quote her words, and an `inspect(reason)` could.
+  defp announce(%Reflection{id: id}, {:error, code}) do
+    Logger.warning("Reflection #{id}: no answer (#{code})")
+  end
+
+  defp announce(_row, _outcome), do: :ok
 
   defp record(row, outcome) do
     case Reflections.record_answer(row, outcome) do
