@@ -224,19 +224,25 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
   read — are different claims that only mean something if a caller can ask for
   either one on a live system.
   """
-  def adventure_log do
-    case call_nats_subject(@adventure_sessions_subject, %{}, 5_000) do
-      {:ok, reply} ->
-        adventure_log(reply, fn body ->
-          call_nats_subject(@adventure_window_subject, body, 5_000)
-        end)
+  def adventure_log, do: adventure_log(&read_sessions/0)
 
-      _ ->
-        "Adventures: unavailable"
-    end
+  @doc """
+  The same read, with the session read injected.
+
+  The window read still goes out over NATS — this seam exists so a test can pin which
+  answer the formatter is handed, without a socket. That is not a hypothetical: the
+  first version of this function unwrapped the read and passed the payload on, so
+  every live call answered "unavailable" while every unit test passed, because the
+  tests handed the formatter the shape the caller no longer produced.
+  """
+  def adventure_log(read_sessions) when is_function(read_sessions, 0) do
+    adventure_log(read_sessions.(), &read_window/1)
   rescue
     _ -> "Adventures: unavailable"
   end
+
+  defp read_sessions, do: call_nats_subject(@adventure_sessions_subject, %{}, 5_000)
+  defp read_window(body), do: call_nats_subject(@adventure_window_subject, body, 5_000)
 
   @doc """
   The adventure log, built from the session list's raw answer and a reader for the

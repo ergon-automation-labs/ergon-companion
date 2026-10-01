@@ -40,6 +40,23 @@ defmodule BotArmyCompanion.ReflectionAdventureTest do
 
   defp read_window(reply), do: fn _body -> reply end
 
+  describe "the live log's wiring" do
+    test "a list that answered with no windows is a fact, not a refusal" do
+      assert ReflectionHandler.adventure_log(fn -> sessions_reply([]) end) ==
+               "Adventures: no window has been opened yet"
+    end
+
+    test "a session read that failed is a refusal, not an empty table" do
+      assert ReflectionHandler.adventure_log(fn -> {:error, :timeout} end) ==
+               "Adventures: unavailable"
+    end
+
+    test "a reader that raises does not take the reflection down with it" do
+      assert ReflectionHandler.adventure_log(fn -> raise "dead broker" end) ==
+               "Adventures: unavailable"
+    end
+  end
+
   describe "the window it reflects on" do
     test "no window at all is a fact, not an unavailable read" do
       log = ReflectionHandler.adventure_log(sessions_reply([]), read_window(window_reply([])))
