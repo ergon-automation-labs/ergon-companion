@@ -36,6 +36,12 @@ defmodule BotArmyCompanion.ReflectionAnswer do
   prompt — the retry is built from whichever prompt asked the question, because a
   narrator corrected in the voice of a companion would answer as one.
 
+  A caller may also state what the *work* needs (`compose/3`), because a budget is a
+  property of the work: an answer to a captured reflection has a screen waiting on it,
+  and a narration has nothing waiting on it at all — see
+  `BotArmyCompanion.PartyNarrator.budget_ms/0`. Everything else about the request
+  stays here.
+
   ## Privacy
 
   Her text is the payload of the request and is never logged. That extends to
@@ -179,14 +185,18 @@ defmodule BotArmyCompanion.ReflectionAnswer do
   discipline — check the answer, ask **once** more when it promised, deliver the second
   answer when there is one and the first, flagged, when there is not.
 
+  `opts` are request options the caller must state about the work itself (today only a
+  `:budget_ms`), merged over the configured ones. A caller that says nothing gets the
+  configured discipline unchanged.
+
   Returns `{:ok, %{text: …, model: …, promise_flagged: …}}` or `{:error, code}`.
   """
-  def compose(system, user) when is_binary(system) and is_binary(user) do
-    case attempt(user, system) do
+  def compose(system, user, opts \\ []) when is_binary(system) and is_binary(user) do
+    case attempt(user, system, opts) do
       {:ok, answered} ->
         case promise_check(answered.text) do
           :clean -> {:ok, %{answered | promise_flagged: false}}
-          {:promise, _patterns} -> retry_without_promise(system, user, answered)
+          {:promise, _patterns} -> retry_without_promise(system, user, answered, opts)
         end
 
       {:error, code} ->
@@ -197,9 +207,9 @@ defmodule BotArmyCompanion.ReflectionAnswer do
   # Keep the first answer whatever the retry does. A retry that fails is not a
   # reason to lose words the model already produced — it is a reason to say the
   # promise is there.
-  defp retry_without_promise(system, user, first) do
+  defp retry_without_promise(system, user, first, opts) do
     if config()[:promise_retries] >= 1 do
-      retry_attempt(system, user, first)
+      retry_attempt(system, user, first, opts)
     else
       {:ok, %{first | promise_flagged: true}}
     end
@@ -207,8 +217,8 @@ defmodule BotArmyCompanion.ReflectionAnswer do
 
   # The *caller's* prompt plus the instruction, not this module's default: a narrator
   # corrected in the voice of a companion would answer as one.
-  defp retry_attempt(system, user, first) do
-    case attempt(user, system <> "\n\n" <> @no_promise_retry) do
+  defp retry_attempt(system, user, first, opts) do
+    case attempt(user, system <> "\n\n" <> @no_promise_retry, opts) do
       {:ok, second} ->
         {:ok, settle(second)}
 
@@ -227,8 +237,8 @@ defmodule BotArmyCompanion.ReflectionAnswer do
     end
   end
 
-  defp attempt(user, system) do
-    case llm().answer(system, user, llm_opts()) do
+  defp attempt(user, system, opts) do
+    case llm().answer(system, user, llm_opts(opts)) do
       {:ok, %{text: text} = answered} when is_binary(text) ->
         if String.trim(text) == "" do
           {:error, :empty_answer}
@@ -251,20 +261,26 @@ defmodule BotArmyCompanion.ReflectionAnswer do
     kind, reason -> {:error, crash_code(kind, reason)}
   end
 
-  defp llm_opts do
+  # The caller may state what the work needs — a narration has no screen waiting on it and
+  # can wait far longer than an answer to a captured reflection — so a `:budget_ms` override
+  # is merged in. Everything else about the request stays here, in one place.
+  defp llm_opts(overrides) do
     settings = config()
 
-    [
-      subject: settings[:subject],
-      status_subject: settings[:status_subject],
-      model_type: settings[:model_type],
-      lane: settings[:lane],
-      max_tokens: settings[:max_tokens],
-      budget_ms: settings[:budget_ms],
-      poll_ms: settings[:poll_ms],
-      submit_timeout_ms: settings[:submit_timeout_ms],
-      status_timeout_ms: settings[:status_timeout_ms]
-    ]
+    Keyword.merge(
+      [
+        subject: settings[:subject],
+        status_subject: settings[:status_subject],
+        model_type: settings[:model_type],
+        lane: settings[:lane],
+        max_tokens: settings[:max_tokens],
+        budget_ms: settings[:budget_ms],
+        poll_ms: settings[:poll_ms],
+        submit_timeout_ms: settings[:submit_timeout_ms],
+        status_timeout_ms: settings[:status_timeout_ms]
+      ],
+      overrides
+    )
   end
 
   @doc """

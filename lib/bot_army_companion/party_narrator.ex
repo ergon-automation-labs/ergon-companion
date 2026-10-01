@@ -72,6 +72,14 @@ defmodule BotArmyCompanion.PartyNarrator do
   # part of the path its narrowest gate.
   @request_timeout_ms 30_000
 
+  # How long the narrator is allowed to take over the words. Nothing is waiting for them:
+  # the ask is a publish, and the window honestly says "(she says nothing yet)" until they
+  # arrive — so this budget answers to the lane, not to a screen. The lane is a local
+  # uncensored model, measured (2026-10-01) at 74 s on the 9B and 287 s on the 27B for a
+  # ONE-WORD answer, which is why the reflection lane's five minutes — right for an answer
+  # someone is waiting for — cannot fit a paragraph of narration.
+  @budget_ms 900_000
+
   @system_prompt """
   You are Eir, the narrator of this table's game. Someone has handed you a turn to tell.
 
@@ -92,6 +100,9 @@ defmodule BotArmyCompanion.PartyNarrator do
 
   @doc "The instruction the narrator is given about its own behaviour."
   def system_prompt, do: @system_prompt
+
+  @doc "How long the narrator may take over the words (#{@budget_ms} ms by default)."
+  def budget_ms, do: @budget_ms
 
   @doc """
   Is this ask for us?
@@ -240,7 +251,7 @@ defmodule BotArmyCompanion.PartyNarrator do
   defp narrate_in_window(session_id, tenant_id, ask) do
     log = read_log(session_id, tenant_id)
 
-    case ReflectionAnswer.compose(@system_prompt, prompt(ask, log)) do
+    case ReflectionAnswer.compose(@system_prompt, prompt(ask, log), budget_ms: budget_ms()) do
       {:ok, answered} ->
         write_turn(session_id, tenant_id, answered)
 

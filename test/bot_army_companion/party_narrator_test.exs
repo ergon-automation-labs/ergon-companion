@@ -26,8 +26,8 @@ defmodule BotArmyCompanion.PartyNarratorTest do
     # Answers come from the application environment, keyed by subject, so a test reads as
     # a list of replies rather than as a mock. Each call is reported to the caller, which
     # for these tests is the process running the narration.
-    def request(subject, payload, _opts) do
-      send(self(), {:request, subject, payload})
+    def request(subject, payload, opts) do
+      send(self(), {:request, subject, payload, opts})
 
       :bot_army_companion
       |> Application.get_env(:answers, %{})
@@ -177,9 +177,13 @@ defmodule BotArmyCompanion.PartyNarratorTest do
       assert text =~ "lock gave way"
       assert written.fact["id"] == "fact-1"
 
-      assert_received {:request, @context, %{"session_id" => @session, "tenant_id" => @tenant}}
+      assert_received {:request, @context, %{"session_id" => @session, "tenant_id" => @tenant},
+                       read_opts}
 
-      assert_received {:request, @add, fact}
+      assert read_opts[:timeout_ms] == 30_000
+
+      assert_received {:request, @add, fact, write_opts}
+      assert write_opts[:timeout_ms] == 30_000
       assert fact["session_id"] == @session
       assert fact["tenant_id"] == @tenant
       assert fact["category"] == "narration"
@@ -187,6 +191,38 @@ defmodule BotArmyCompanion.PartyNarratorTest do
       assert fact["content"] == text
       # A narrator is asked about a turn, not a person.
       refute Map.has_key?(fact, "user_id")
+    end
+
+    test "the words are given the narration's budget, not a screen's" do
+      # Nothing is waiting for a narration, so its budget answers to the lane rather
+      # than to a deadline borrowed from a screen. The lane is slow: the local
+      # uncensored model was measured at 74 s (9B) and 287 s (27B) for ONE WORD, so a
+      # paragraph cannot land inside the reflection lane's five minutes.
+      script(window([]))
+
+      expect(ReflectionAnswerLlmMock, :answer, fn _system, _user, opts ->
+        assert opts[:budget_ms] == PartyNarrator.budget_ms()
+        assert opts[:budget_ms] >= 900_000
+        {:ok, %{text: "Words.", model: "test-model"}}
+      end)
+
+      assert {:ok, _written} = PartyNarrator.narrate(ask())
+    end
+
+    test "a promised narration is retried on the same budget, not a shorter one" do
+      script(window([]))
+
+      expect(ReflectionAnswerLlmMock, :answer, fn _system, _user, opts ->
+        assert opts[:budget_ms] == PartyNarrator.budget_ms()
+        {:ok, %{text: "I promise I will always tell it.", model: "test-model"}}
+      end)
+
+      expect(ReflectionAnswerLlmMock, :answer, fn _system, _user, opts ->
+        assert opts[:budget_ms] == PartyNarrator.budget_ms()
+        {:ok, %{text: "That is what happened.", model: "test-model"}}
+      end)
+
+      assert {:ok, %{promise_flagged: false}} = PartyNarrator.narrate(ask())
     end
 
     test "the log is read through rpg's own read, newest turns last for the model" do
@@ -261,7 +297,7 @@ defmodule BotArmyCompanion.PartyNarratorTest do
         end)
 
       assert log =~ "left alone"
-      refute_received {:request, _, _}
+      refute_received {:request, _, _, _}
     end
 
     test "an ask with no window is refused, and nothing is read or written" do
@@ -274,7 +310,7 @@ defmodule BotArmyCompanion.PartyNarratorTest do
         end)
 
       assert log =~ "names no window"
-      refute_received {:request, _, _}
+      refute_received {:request, _, _, _}
     end
 
     test "the words are not logged, and a failure is logged as its code" do
@@ -295,7 +331,7 @@ defmodule BotArmyCompanion.PartyNarratorTest do
       log = capture_log(fn -> assert {:error, :timeout} = PartyNarrator.narrate(ask()) end)
 
       assert log =~ "no words came back"
-      refute_received {:request, @add, _}
+      refute_received {:request, @add, _, _}
     end
 
     test "a log that cannot be read costs the model the log, not the turn" do
@@ -313,7 +349,7 @@ defmodule BotArmyCompanion.PartyNarratorTest do
       log = capture_log(fn -> assert {:ok, _written} = PartyNarrator.narrate(ask()) end)
 
       assert log =~ "the log could not be read"
-      assert_received {:request, @add, _fact}
+      assert_received {:request, @add, _fact, opts}
     end
 
     test "rpg refusing the context read is unreadable, not an empty window, and it is said out loud" do

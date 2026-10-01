@@ -221,6 +221,47 @@ defmodule BotArmyCompanion.ReflectionAnswerTest do
       assert system =~ "promised"
     end
 
+    test "the caller may state the budget the work needs, and only that" do
+      expect(ReflectionAnswerLlmMock, :answer, fn _system, _user, opts ->
+        assert opts[:budget_ms] == 900_000
+        # Everything else about the request stays the owner's.
+        assert opts[:model_type] == "uncensored"
+        assert opts[:max_tokens] == 900
+        {:ok, %{text: "Words that can wait.", model: "test-model"}}
+      end)
+
+      assert {:ok, _answered} =
+               ReflectionAnswer.compose("You are a narrator.", "Tell the turn.",
+                 budget_ms: 900_000
+               )
+    end
+
+    test "a caller that says nothing gets the configured discipline, unchanged" do
+      expect(ReflectionAnswerLlmMock, :answer, fn _system, _user, opts ->
+        assert opts[:budget_ms] == ReflectionAnswer.config()[:budget_ms]
+        {:ok, %{text: "Words.", model: "test-model"}}
+      end)
+
+      assert {:ok, _answered} = ReflectionAnswer.compose("You are a narrator.", "Tell the turn.")
+    end
+
+    test "the retry of a caller's own budget is that budget, not the configured one" do
+      expect(ReflectionAnswerLlmMock, :answer, fn _s, _u, opts ->
+        assert opts[:budget_ms] == 900_000
+        {:ok, %{text: "I promise I will always tell it.", model: "test-model"}}
+      end)
+
+      expect(ReflectionAnswerLlmMock, :answer, fn _s, _u, opts ->
+        assert opts[:budget_ms] == 900_000
+        {:ok, %{text: "That is what happened.", model: "test-model"}}
+      end)
+
+      assert {:ok, %{promise_flagged: false}} =
+               ReflectionAnswer.compose("You are a narrator.", "Tell the turn.",
+                 budget_ms: 900_000
+               )
+    end
+
     test "a failure in the first answer is the caller's failure code, unchanged" do
       expect(ReflectionAnswerLlmMock, :answer, fn _s, _u, _o -> {:error, :timeout} end)
 
