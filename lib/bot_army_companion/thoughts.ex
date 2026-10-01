@@ -47,8 +47,15 @@ defmodule BotArmyCompanion.Thoughts do
     update_thought(thought, %{active: false})
   end
 
-  def seed_default_thoughts do
-    thoughts = [
+  @doc """
+  The reflection prompts this bot seeds, as data.
+
+  Public so the seed list can be read — and checked — without a database: the
+  questions are content, and content that can only be seen by writing it to a
+  table is content nobody reviews.
+  """
+  def default_thoughts do
+    [
       %{
         angle: 0,
         query:
@@ -112,10 +119,21 @@ defmodule BotArmyCompanion.Thoughts do
         active: true,
         priority: 8,
         tags: ["loneliness", "connection", "friendship"]
+      },
+      %{
+        angle: 11,
+        query:
+          "The party is the one table in the system that is play and not work. Who is she travelling with, what actually happened at the table, and what did they do that she could not have done alone? Notice whether the adventures are rest or one more performance she has to keep up. One paragraph, warm, and specific to the log.",
+        active: true,
+        priority: 9,
+        tags: ["rpg", "party", "play", "adventure"]
       }
     ]
+  end
 
-    Enum.each(thoughts, fn attrs ->
+  def seed_default_thoughts do
+    default_thoughts()
+    |> Enum.each(fn attrs ->
       # Update only if angle exists; don't delete old ones, let them be overwritten
       angle = attrs.angle
 

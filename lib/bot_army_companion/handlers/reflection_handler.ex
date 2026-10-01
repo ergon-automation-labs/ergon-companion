@@ -56,6 +56,7 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
     calendar_events = fetch_calendar_events()
     inbox_status = fetch_inbox_status()
     daily_log = fetch_recent_daily_log()
+    adventure_log = fetch_adventure_log()
 
     {:ok,
      %{
@@ -66,7 +67,8 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
        friction_summary: friction_summary,
        calendar_events: calendar_events,
        inbox_status: inbox_status,
-       daily_log: daily_log
+       daily_log: daily_log,
+       adventure_log: adventure_log
      }}
   end
 
@@ -197,6 +199,151 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
   rescue
     _ -> "Daily log: unavailable"
   end
+
+  # --- The party's adventures ---
+
+  # Where the table lives: the same two questions the party phone asks, so the
+  # reflection and the screen see one table and not two.
+  @adventure_sessions_subject "rpg.session.list"
+  @adventure_window_subject "rpg.session.gather_context"
+
+  # Bounded so one long table cannot become the whole prompt: the newest turns,
+  # each trimmed to a readable line.
+  @adventure_turns 5
+  @adventure_turn_chars 300
+
+  # What the party angle reflects on: what the table is, who is at it, and what
+  # happened there. Read from the running window rather than from the GTD tasks the
+  # party is made of, so the reflection is about the play and not about the plan.
+  defp fetch_adventure_log do
+    case call_nats_subject(@adventure_sessions_subject, %{}, 5_000) do
+      {:ok, reply} ->
+        adventure_log(reply, fn body ->
+          call_nats_subject(@adventure_window_subject, body, 5_000)
+        end)
+
+      _ ->
+        "Adventures: unavailable"
+    end
+  rescue
+    _ -> "Adventures: unavailable"
+  end
+
+  @doc """
+  The adventure log, built from the session list's raw answer and a reader for the
+  window's raw answer.
+
+  Public and pure so the honesty rules are pinned by tests instead of by hope. There
+  are three different nothings here and they are not interchangeable: no window has
+  been opened (a fact), a window that could not be read (a refusal), and a window with
+  nothing written at the table (a fact — an empty table is not a missing one).
+  """
+  def adventure_log({:ok, %{"data" => %{"sessions" => sessions}}}, read_window)
+      when is_list(sessions) do
+    case adventure_window(sessions) do
+      {:ok, session} ->
+        session
+        |> adventure_lines(read_window.(%{"session_id" => session["id"]}))
+        |> Enum.join("\n")
+
+      :none ->
+        "Adventures: no window has been opened yet"
+    end
+  end
+
+  def adventure_log(_list_reply, _read_window), do: "Adventures: unavailable"
+
+  # The window to reflect on: the one that is open, or else the one most recently
+  # touched. Both timestamps are ISO-8601, so the newest is the largest string.
+  defp adventure_window(sessions) do
+    case Enum.find(sessions, &(&1["status"] == "active")) do
+      nil ->
+        sessions
+        |> Enum.filter(&is_binary(&1["id"]))
+        |> Enum.sort_by(&(&1["updated_at"] || ""), :desc)
+        |> List.first()
+        |> case do
+          nil -> :none
+          session -> {:ok, session}
+        end
+
+      session ->
+        {:ok, session}
+    end
+  end
+
+  defp adventure_lines(session, window) do
+    ["Adventures: #{adventure_head(session, window)}", party_line(window), turns_line(window)]
+  end
+
+  defp adventure_head(session, {:ok, %{"data" => data}}) when is_map(data) do
+    "#{describe_scene(session)}, #{status_of(session)}, #{turn_phrase(data["scene_facts"])}"
+  end
+
+  defp adventure_head(session, _unreadable) do
+    "#{describe_scene(session)}, #{status_of(session)} — the window could not be read, " <>
+      "so its turns are unreported"
+  end
+
+  defp describe_scene(session) do
+    case session["scene_description"] do
+      scene when is_binary(scene) and scene != "" -> "\"#{scene}\""
+      _unnamed -> "an unnamed scene"
+    end
+  end
+
+  defp status_of(session), do: session["status"] || "status unreported"
+
+  defp turn_phrase(facts) when is_list(facts), do: "#{length(facts)} turns at the table"
+
+  defp turn_phrase(_unreported), do: "an unreported number of turns at the table"
+
+  defp party_line({:ok, %{"data" => data}}) when is_map(data), do: party_line(data["party"])
+  defp party_line({:ok, _other}), do: "The roster was not in the answer."
+
+  defp party_line(%{"members" => members}) when is_list(members), do: members_line(members)
+  defp party_line(%{"members" => _unreported}), do: "The roster could not be read."
+
+  defp party_line(party) when is_map(party) and map_size(party) == 0,
+    do: "She walks with no one yet."
+
+  defp party_line(nil), do: "The roster could not be read."
+  defp party_line(_unreadable), do: "The roster could not be read."
+
+  defp members_line([]), do: "She walks with no one yet."
+
+  defp members_line(members) do
+    case members |> Enum.map(&member_name/1) |> Enum.reject(&is_nil/1) do
+      [] -> "She walks with #{length(members)} companions the roster does not name."
+      names -> "She walks with #{Enum.join(names, ", ")}."
+    end
+  end
+
+  defp member_name(%{"name" => name}) when is_binary(name) and name != "", do: name
+  defp member_name(_unnamed), do: nil
+
+  defp turns_line({:ok, %{"data" => %{"scene_facts" => facts}}}) when is_list(facts),
+    do: turns_line(facts)
+
+  defp turns_line({:ok, %{"data" => data}}) when is_map(data),
+    do: "The table's turns were not in the answer."
+
+  defp turns_line([]), do: "Nothing has been written at the table yet."
+
+  defp turns_line(facts) when is_list(facts) do
+    case facts
+         |> Enum.take(@adventure_turns)
+         |> Enum.map(&trim_turn/1)
+         |> Enum.reject(&(&1 == "")) do
+      [] -> "Nothing has been written at the table yet."
+      turns -> "Recently at the table:\n#{Enum.map_join(turns, "\n", &"• #{&1}")}"
+    end
+  end
+
+  defp turns_line(_unreadable), do: "The table's turns could not be read."
+
+  defp trim_turn(turn) when is_binary(turn), do: String.slice(turn, 0, @adventure_turn_chars)
+  defp trim_turn(_not_text), do: ""
 
   defp get_reflection_angle do
     # Fetch a random active thought from the database.
@@ -367,6 +514,13 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
     context_parts =
       if system_state[:daily_log] do
         ["#{system_state[:daily_log]}" | context_parts]
+      else
+        context_parts
+      end
+
+    context_parts =
+      if system_state[:adventure_log] do
+        ["#{system_state[:adventure_log]}" | context_parts]
       else
         context_parts
       end
