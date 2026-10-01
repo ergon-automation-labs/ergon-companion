@@ -56,7 +56,7 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
     calendar_events = fetch_calendar_events()
     inbox_status = fetch_inbox_status()
     daily_log = fetch_recent_daily_log()
-    adventure_log = fetch_adventure_log()
+    adventure_log = adventure_log()
 
     {:ok,
      %{
@@ -212,10 +212,19 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
   @adventure_turns 5
   @adventure_turn_chars 300
 
-  # What the party angle reflects on: what the table is, who is at it, and what
-  # happened there. Read from the running window rather than from the GTD tasks the
-  # party is made of, so the reflection is about the play and not about the plan.
-  defp fetch_adventure_log do
+  @doc """
+  What the companion knows about the table right now, read from the running window.
+
+  Read from the same two subjects the party screen asks, rather than from the GTD
+  tasks the party is made of, so a reflection on the party reflects the play and not
+  the plan — and so its words are evidence instead of invention.
+
+  Public on purpose. A log nobody can read back is a log nobody can trust, and the
+  two nothings it can return — no window has been opened, the window could not be
+  read — are different claims that only mean something if a caller can ask for
+  either one on a live system.
+  """
+  def adventure_log do
     case call_nats_subject(@adventure_sessions_subject, %{}, 5_000) do
       {:ok, reply} ->
         adventure_log(reply, fn body ->
