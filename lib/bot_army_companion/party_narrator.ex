@@ -67,6 +67,11 @@ defmodule BotArmyCompanion.PartyNarrator do
   @category "narration"
   @default_bot_id "companion_bot"
 
+  # How long the two requests of a turn wait. Generous on purpose: both cross a leafnode,
+  # the narration's own budget is minutes, and a ten-second default would make the cheapest
+  # part of the path its narrowest gate.
+  @request_timeout_ms 30_000
+
   @system_prompt """
   You are Eir, the narrator of this table's game. Someone has handed you a turn to tell.
 
@@ -250,22 +255,38 @@ defmodule BotArmyCompanion.PartyNarrator do
 
   # Best effort, and read through the seam so a test can hold the log.
   defp read_log(session_id, tenant_id) do
-    case publisher().request(@context_subject, log_request(session_id, tenant_id), []) do
+    case publisher().request(@context_subject, log_request(session_id, tenant_id),
+           timeout_ms: @request_timeout_ms
+         ) do
       {:ok, reply} ->
-        log_from(reply)
+        case log_from(reply) do
+          {:ok, log} -> {:ok, log}
+          :unreadable -> unreadable(session_id, "an unreadable reply")
+        end
 
       {:error, code} ->
-        Logger.warning(
-          "[PartyNarrator] Window #{session_id}: the log could not be read (#{inspect(code)}); narrating from the turn alone"
-        )
-
-        :unreadable
+        unreadable(session_id, inspect(code))
     end
+  end
+
+  # A read that did not come back and a read that came back unrecognisable are one fact to
+  # the narrator, and both are said out loud: a window narrated in silence is a scene nobody
+  # read.
+  defp unreadable(session_id, why) do
+    Logger.warning(
+      "[PartyNarrator] Window #{session_id}: the log could not be read (#{why}); narrating from the turn alone"
+    )
+
+    :unreadable
   end
 
   # The write is the truth of the turn, so the caller is told the fact and not the publish.
   defp write_turn(session_id, tenant_id, answered) do
-    case publisher().request(@add_subject, fact_payload(session_id, tenant_id, answered.text), []) do
+    case publisher().request(
+           @add_subject,
+           fact_payload(session_id, tenant_id, answered.text),
+           timeout_ms: @request_timeout_ms
+         ) do
       {:ok, %{"ok" => true, "data" => %{} = fact}} ->
         Logger.info(
           "[PartyNarrator] Window #{session_id}: wrote #{String.length(answered.text)} characters of narration"

@@ -316,7 +316,7 @@ defmodule BotArmyCompanion.PartyNarratorTest do
       assert_received {:request, @add, _fact}
     end
 
-    test "rpg refusing the context read is unreadable, not an empty window" do
+    test "rpg refusing the context read is unreadable, not an empty window, and it is said out loud" do
       Application.put_env(:bot_army_companion, :answers, %{
         @context =>
           {:ok, %{"ok" => false, "error" => "no such session", "code" => "session_not_active"}},
@@ -328,7 +328,11 @@ defmodule BotArmyCompanion.PartyNarratorTest do
         {:ok, %{text: "Words.", model: "test-model"}}
       end)
 
-      assert {:ok, _written} = PartyNarrator.narrate(ask())
+      log = capture_log(fn -> assert {:ok, _written} = PartyNarrator.narrate(ask()) end)
+
+      # A refusal that comes back as a *reply* is still a read that did not happen: it must
+      # reach the log, or a window narrated blind looks exactly like a window that was read.
+      assert log =~ "the log could not be read (an unreadable reply)"
       assert PartyNarrator.log_from(%{"ok" => false, "error" => "nope"}) == :unreadable
       assert PartyNarrator.log_from(%{"ok" => true, "data" => %{}}) == :unreadable
       assert PartyNarrator.log_from(:nonsense) == :unreadable
