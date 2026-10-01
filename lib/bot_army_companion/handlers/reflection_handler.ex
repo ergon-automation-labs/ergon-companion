@@ -610,7 +610,7 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
           %{"job_id" => job_id, "status" => "accepted"} ->
             # Asynchronous response - poll for results
             Logger.debug("request_bridge_chat: Got async job_id=#{job_id}, polling for results")
-            poll_job_result(job_id, 0, 60)
+            poll_job_result(job_id)
 
           _ ->
             Logger.error("bridge.chat unexpected response shape: #{Private.describe(response)}")
@@ -624,23 +624,58 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
     end
   end
 
-  # Poll for job completion (up to 60 seconds, checking every second)
-  defp poll_job_result(_job_id, attempt, max_attempts) when attempt >= max_attempts do
-    Logger.error("poll_job_result: Timeout waiting for job after #{max_attempts}s")
-    {:error, "Job timeout: LLM response took too long"}
+  # How long the companion waits for the bridge to finish a reflection.
+  #
+  # It waits LONGER than the bridge waits for the model (15 min) on purpose: the
+  # bridge is the one bot that can tell us an llm job timed out, and a caller that
+  # hangs up first can only replace that verdict with a vaguer one of its own. On
+  # 2026-10-01 a 60 s budget here ended reflections whose answers were minutes away.
+  @job_wait_budget_ms 1_080_000
+  @job_status_timeout_ms 5_000
+  @job_poll_quick_ms 1_000
+  @job_poll_slow_ms 5_000
+  @job_poll_quick_window_ms 30_000
+
+  @doc """
+  The companion's wait budget, in milliseconds.
+
+  Public because it is a promise about another bot: the bridge gives up on an llm
+  job after 15 minutes, so this figure has to stay above that. A caller that hangs
+  up first can only replace the bridge's own verdict ("the llm job timed out") with
+  a vaguer one of its own, which is what the old 60 s budget did here.
+  """
+  @spec job_wait_budget_ms() :: pos_integer()
+  def job_wait_budget_ms, do: @job_wait_budget_ms
+
+  defp poll_job_result(job_id), do: poll_job_result(job_id, 0, @job_wait_budget_ms)
+
+  defp poll_job_result(job_id, waited_ms, budget_ms) do
+    case call_nats_subject("bridge.job.status", %{"job_id" => job_id}, @job_status_timeout_ms) do
+      {:ok, reply} -> job_status_step(reply, job_id, waited_ms, budget_ms)
+      error -> retry_job_status(error, job_id, waited_ms, budget_ms)
+    end
   end
 
-  defp poll_job_result(job_id, attempt, max_attempts) do
-    # Wait 1 second before polling (except on first attempt)
-    if attempt > 0 do
-      Process.sleep(1000)
-    end
+  @doc """
+  How long to wait before asking again, given how long we have already waited.
 
-    payload = %{"job_id" => job_id}
+  A second while the answer is likely to be quick, five once it is clearly long:
+  polling a slow model every second is 900 questions for one answer. Public and
+  pure so the rule can be asserted without a broker.
+  """
+  @spec poll_delay(non_neg_integer()) :: pos_integer()
+  def poll_delay(waited_ms) when waited_ms < @job_poll_quick_window_ms, do: @job_poll_quick_ms
+  def poll_delay(_waited_ms), do: @job_poll_slow_ms
 
-    case call_nats_subject("bridge.job.status", payload, 5_000) do
-      {:ok, reply} -> job_status_step(reply, job_id, attempt, max_attempts)
-      error -> retry_job_status(error, job_id, attempt, max_attempts)
+  defp keep_waiting(job_id, waited_ms, budget_ms) do
+    delay = poll_delay(waited_ms)
+
+    if waited_ms + delay >= budget_ms do
+      Logger.error("poll_job_result: gave up after #{div(waited_ms, 1000)}s of waiting")
+      {:error, "Job timeout: the answer did not arrive in time"}
+    else
+      Process.sleep(delay)
+      poll_job_result(job_id, waited_ms + delay, budget_ms)
     end
   end
 
@@ -649,10 +684,10 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
   # reading one bot's vocabulary against the other bot's replies is what failed
   # this lane (2026-10-01 06:02) — a running job logged as an error, once a
   # second, until the reflection gave up on work that was being done.
-  defp job_status_step(reply, job_id, attempt, max_attempts) do
+  defp job_status_step(reply, job_id, waited_ms, budget_ms) do
     case JobStatus.step(reply) do
       {:done, result} ->
-        Logger.debug("poll_job_result: Job completed after #{attempt + 1}s")
+        Logger.debug("poll_job_result: Job completed after #{div(waited_ms, 1000)}s")
         extract_result_text(result)
 
       {:failed, error} ->
@@ -660,25 +695,21 @@ defmodule BotArmyCompanion.Handlers.ReflectionHandler do
         {:error, "Job failed: #{Private.describe(error)}"}
 
       :wait ->
-        Logger.debug(
-          "poll_job_result: Job still running (attempt #{attempt + 1}/#{max_attempts})"
-        )
-
-        poll_job_result(job_id, attempt + 1, max_attempts)
+        Logger.debug("poll_job_result: Job still running (#{div(waited_ms, 1000)}s waited)")
+        keep_waiting(job_id, waited_ms, budget_ms)
 
       :missing ->
         Logger.error("poll_job_result: the bridge does not know job #{job_id}")
         {:error, "Job failed: the bridge does not know that job"}
 
       :unreadable ->
-        retry_job_status(reply, job_id, attempt, max_attempts)
+        retry_job_status(reply, job_id, waited_ms, budget_ms)
     end
   end
 
-  defp retry_job_status(reason, job_id, attempt, max_attempts) do
+  defp retry_job_status(reason, job_id, waited_ms, budget_ms) do
     Logger.error("poll_job_result: Status check error: #{Private.describe(reason)}")
-    # Retry on error
-    poll_job_result(job_id, attempt + 1, max_attempts)
+    keep_waiting(job_id, waited_ms, budget_ms)
   end
 
   # Extract text from various result formats

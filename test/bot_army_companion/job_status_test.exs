@@ -83,4 +83,25 @@ defmodule BotArmyCompanion.JobStatusTest do
       assert :unreadable = JobStatus.step("a bare string")
     end
   end
+
+  describe "how long the companion waits" do
+    alias BotArmyCompanion.Handlers.ReflectionHandler
+
+    # A second while the answer is likely to be quick, five once it is clearly
+    # long. Polling a slow model every second is 900 questions for one answer, and
+    # on 2026-10-01 the answer was minutes away when the 60th question ran out.
+    test "asks often at first, then less often" do
+      assert ReflectionHandler.poll_delay(0) == 1_000
+      assert ReflectionHandler.poll_delay(29_999) == 1_000
+      assert ReflectionHandler.poll_delay(30_000) == 5_000
+      assert ReflectionHandler.poll_delay(600_000) == 5_000
+    end
+
+    test "waits longer than the bridge does, so the bridge's verdict is the one reported" do
+      # The bridge gives up on an llm job after 15 minutes. If this budget were
+      # smaller, a slow answer would be reported as the companion's timeout rather
+      # than as the bridge's — a worse explanation of the same event.
+      assert ReflectionHandler.job_wait_budget_ms() > 900_000
+    end
+  end
 end
