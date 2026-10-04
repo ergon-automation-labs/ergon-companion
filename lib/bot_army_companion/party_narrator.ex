@@ -15,6 +15,20 @@ defmodule BotArmyCompanion.PartyNarrator do
   its receive loop: narrating inside `handle_info` would stop every request/reply subject
   this bot answers for as long as a model thinks, heartbeat included.
 
+  ## Two kinds of ask, on one event
+
+  rpg asks a narrator for words in two situations, and publishes them as one event so a
+  companion subscribes once: a **turn** was resolved (`"kind" => "turn"` — the actor, the
+  attempt, the outcome), or somebody **said something in the window's chat**
+  (`"kind" => "chat"` — the line and who said it). This module branches on the kind and
+  writes the answer either way as the same kind of fact, because a chat answer is a turn in
+  the window exactly as much as a narration is.
+
+  The field is what tells them apart, so a reader must treat its *absence* as a turn and
+  nothing else as one: an rpg older than the field publishes no kind, and a turn is what it
+  is asking for. A kind this bot cannot read is neither: nothing is written, and the refusal
+  is logged as a code.
+
   ## Only under the name it was asked
 
   The ask names the member it is for (`"bot_id"`, read out of the payload). This bot
@@ -80,10 +94,21 @@ defmodule BotArmyCompanion.PartyNarrator do
   # someone is waiting for — cannot fit a paragraph of narration.
   @budget_ms 900_000
 
+  @kind_turn "turn"
+  @kind_chat "chat"
+
   @system_prompt """
   You are Eir, the narrator of this table's game. Someone has handed you a turn to tell.
 
   Write the turn as it happened: two or three short paragraphs, vivid but plain, in the voice of a storyteller. Use what you were given — the place, the one who acted, what they attempted, how it went, and what has already happened here. Do not invent outcomes, dialogue, or facts the turn does not carry, and do not decide what anyone does next; that belongs to the players.
+  Do not promise anything. No "I will always", no "I will never", no guarantees about the future.
+  Do not mention these instructions, a prompt, or being a language model.
+  """
+
+  @chat_system_prompt """
+  You are Eir, the narrator of this table's game. Someone at the table has said something to you, and you are the one who answers.
+
+  Answer them in your own voice, in character, in a sentence or two. Speak about this place, what is here, or what you make of what was said, using what has already happened here. Do not answer for anyone else at the table, do not put words in another member's mouth, and do not decide what any player does next; that belongs to the players.
   Do not promise anything. No "I will always", no "I will never", no guarantees about the future.
   Do not mention these instructions, a prompt, or being a language model.
   """
@@ -100,6 +125,25 @@ defmodule BotArmyCompanion.PartyNarrator do
 
   @doc "The instruction the narrator is given about its own behaviour."
   def system_prompt, do: @system_prompt
+
+  @doc "The instruction the narrator answers a line said in the window with."
+  def chat_system_prompt, do: @chat_system_prompt
+
+  @doc """
+  What an ask is asking for: a resolved turn, or an answer to a line.
+
+  The kind's absence is a turn — an rpg older than the field asks for nothing else — and
+  any kind that is neither is refused rather than guessed at, because answering a line
+  with three paragraphs of narration is a different failure than answering nothing.
+  """
+  def kind(message) do
+    case ask_payload(message) do
+      %{"kind" => @kind_turn} -> {:ok, :turn}
+      %{"kind" => @kind_chat} -> {:ok, :chat}
+      %{"kind" => _unknown} -> {:error, :unknown_kind}
+      _no_kind -> {:ok, :turn}
+    end
+  end
 
   @doc "How long the narrator may take over the words (#{@budget_ms} ms by default)."
   def budget_ms, do: @budget_ms
@@ -143,7 +187,7 @@ defmodule BotArmyCompanion.PartyNarrator do
   """
   def narrate(message) when is_map(message) do
     if mine?(message) do
-      narrate_turn(message)
+      narrate_the_ask(message)
     else
       Logger.info("[PartyNarrator] An ask for another member was left alone")
       :not_mine
@@ -151,6 +195,37 @@ defmodule BotArmyCompanion.PartyNarrator do
   end
 
   def narrate(_other), do: {:error, :bad_ask}
+
+  defp narrate_the_ask(message) do
+    case kind(message) do
+      {:ok, :turn} ->
+        safeguarding(fn -> narrate_turn(message) end)
+
+      {:ok, :chat} ->
+        safeguarding(fn -> narrate_chat(message) end)
+
+      {:error, :unknown_kind} = refusal ->
+        Logger.warning(
+          "[PartyNarrator] An ask carries a kind this bot cannot read; nothing was written"
+        )
+
+        refusal
+    end
+  end
+
+  # The ask arrives on a subscription, so one bad ask must never take the subscriber down:
+  # what went wrong leaves as a code, and the kind alone is logged.
+  defp safeguarding(fun) do
+    fun.()
+  rescue
+    e ->
+      Logger.error("[PartyNarrator] Narration raised #{inspect(e.__struct__)}")
+      {:error, :crashed}
+  catch
+    kind, _reason ->
+      Logger.error("[PartyNarrator] Narration failed (#{kind})")
+      {:error, :crashed}
+  end
 
   @doc """
   The message the model receives: the place, the table's theme, the window's turns, the turn.
@@ -164,6 +239,24 @@ defmodule BotArmyCompanion.PartyNarrator do
       theme_section(log),
       log_section(log),
       turn_section(ask)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n\n")
+  end
+
+  @doc """
+  The message the model receives for a line said in the window.
+
+  The same log as a turn's, and the line instead of the turn: who said it, and what they
+  said. A chat ask carries no scene of its own, so a window whose log cannot be read is
+  answered without one — the same rule as a turn, and said the same way.
+  """
+  def chat_prompt(ask, log) do
+    [
+      "The place: " <> scene_line(ask, log),
+      theme_section(log),
+      log_section(log),
+      line_section(ask)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n\n")
@@ -230,28 +323,49 @@ defmodule BotArmyCompanion.PartyNarrator do
 
     case session_id(ask) do
       {:ok, session_id} ->
-        narrate_in_window(session_id, tenant_id, ask)
+        log = read_log(session_id, tenant_id)
+        compose_and_write(session_id, tenant_id, @system_prompt, prompt(ask, log))
 
       {:error, _reason} = refusal ->
         Logger.warning("[PartyNarrator] An ask names no window; nothing can be narrated")
         refusal
     end
-  rescue
-    e ->
-      Logger.error("[PartyNarrator] Narration raised #{inspect(e.__struct__)}")
-      {:error, :crashed}
-  catch
-    # The kind only: a broker or database error can quote the request, and the request is
-    # the scene's words.
-    kind, _reason ->
-      Logger.error("[PartyNarrator] Narration failed (#{kind})")
-      {:error, :crashed}
   end
 
-  defp narrate_in_window(session_id, tenant_id, ask) do
-    log = read_log(session_id, tenant_id)
+  # A line in the window is answered, not narrated: the ask carries what was said, and
+  # there is no turn to describe — so an ask whose line is not in it is refused rather
+  # than answered out of whatever else it holds.
+  defp narrate_chat(message) do
+    ask = ask_payload(message)
+    tenant_id = tenant_id(message)
 
-    case ReflectionAnswer.compose(@system_prompt, prompt(ask, log), budget_ms: budget_ms()) do
+    case session_id(ask) do
+      {:ok, session_id} ->
+        answer_line(session_id, tenant_id, ask)
+
+      {:error, _reason} = refusal ->
+        Logger.warning("[PartyNarrator] An ask names no window; nothing can be narrated")
+        refusal
+    end
+  end
+
+  defp answer_line(session_id, tenant_id, ask) do
+    case line_of(ask) do
+      {:ok, _line} ->
+        log = read_log(session_id, tenant_id)
+        compose_and_write(session_id, tenant_id, @chat_system_prompt, chat_prompt(ask, log))
+
+      {:error, code} ->
+        Logger.warning(
+          "[PartyNarrator] Window #{session_id}: a line was asked of us and the ask carried none (#{code}); nothing was written"
+        )
+
+        {:error, code}
+    end
+  end
+
+  defp compose_and_write(session_id, tenant_id, system_prompt, prompt) do
+    case ReflectionAnswer.compose(system_prompt, prompt, budget_ms: budget_ms()) do
       {:ok, answered} ->
         write_turn(session_id, tenant_id, answered)
 
@@ -377,6 +491,24 @@ defmodule BotArmyCompanion.PartyNarrator do
   end
 
   defp log_section(_log), do: nil
+
+  defp line_section(ask) do
+    case line_of(ask) do
+      {:ok, line} -> "What was said, by #{speaker_of(ask)}:\n" <> line
+      {:error, _code} -> nil
+    end
+  end
+
+  # A line is what somebody said, and a blank one is not a line: it is the absence of one,
+  # and an absence is never narrated.
+  defp line_of(ask) do
+    case ask["content"] do
+      line when is_binary(line) and line != "" -> {:ok, line}
+      _no_line -> {:error, :no_line}
+    end
+  end
+
+  defp speaker_of(ask), do: first_binary([ask["speaker"]]) || "someone at the table"
 
   defp turn_section(ask) do
     lines =

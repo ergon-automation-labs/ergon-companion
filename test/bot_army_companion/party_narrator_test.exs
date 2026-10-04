@@ -101,6 +101,23 @@ defmodule BotArmyCompanion.PartyNarratorTest do
     )
   end
 
+  defp chat_ask(payload_overrides \\ %{}) do
+    Map.merge(ask(), %{
+      "payload" =>
+        Map.merge(
+          %{
+            "kind" => "chat",
+            "session_id" => @session,
+            "character_id" => "c-narrator",
+            "bot_id" => "companion_bot",
+            "content" => "is anybody in there",
+            "speaker" => "operator"
+          },
+          payload_overrides
+        )
+    })
+  end
+
   defp window(turns, overrides \\ %{}) do
     Map.merge(
       %{
@@ -397,6 +414,164 @@ defmodule BotArmyCompanion.PartyNarratorTest do
   end
 
   # --- the fact we write ----------------------------------------------------------
+
+  # --- a line said in the window ---------------------------------------------------
+
+  describe "kind/1 — a turn, a line, or neither" do
+    test "an ask with no kind is a turn: that is what an older rpg asks for" do
+      # The field was added after the subject existed, so its absence has to mean the
+      # only thing rpg asked for before it: a turn.
+      assert PartyNarrator.kind(ask()) == {:ok, :turn}
+      assert PartyNarrator.kind(%{"session_id" => @session}) == {:ok, :turn}
+      assert PartyNarrator.kind(ask(%{"payload" => %{"kind" => "turn"}})) == {:ok, :turn}
+    end
+
+    test "a line is a kind of its own" do
+      assert PartyNarrator.kind(chat_ask()) == {:ok, :chat}
+    end
+
+    test "a kind this bot cannot read is refused, not guessed at" do
+      # Answering a line with three paragraphs of narration is a different failure than
+      # answering nothing, so an unreadable kind writes nothing.
+      assert PartyNarrator.kind(ask(%{"payload" => %{"kind" => "ambient"}})) ==
+               {:error, :unknown_kind}
+
+      assert PartyNarrator.kind(chat_ask(%{"kind" => ""})) == {:error, :unknown_kind}
+      assert PartyNarrator.kind(chat_ask(%{"kind" => 7})) == {:error, :unknown_kind}
+    end
+  end
+
+  describe "narrate/1 — a line in the window is answered" do
+    test "the line becomes words and a fact signed with our own name" do
+      script(window(["the door was already open"]), %{"ok" => true, "data" => %{"id" => "fact-2"}})
+
+      expect(ReflectionAnswerLlmMock, :answer, fn system, user, _opts ->
+        assert system == PartyNarrator.chat_system_prompt()
+        assert system =~ "has said something to you"
+        refute system =~ "handed you a turn to tell"
+
+        # The window's read, the line, and who said it — and no turn, because there is
+        # not one: this ask resolved no action.
+        assert user =~ "The place: a flooded crypt"
+        assert user =~ "What has already happened in this window:"
+        assert user =~ "the door was already open"
+        assert user =~ "What was said, by operator:\nis anybody in there"
+        refute user =~ "Who acts"
+
+        {:ok, %{text: "The dark keeps its own counsel.", model: "companion-9b"}}
+      end)
+
+      assert {:ok, %{text: text, model: "companion-9b"} = written} =
+               PartyNarrator.narrate(chat_ask())
+
+      assert written.fact["id"] == "fact-2"
+
+      assert_received {:request, @context, %{"session_id" => @session, "tenant_id" => @tenant},
+                       _read_opts}
+
+      assert_received {:request, @add, fact, _write_opts}
+      assert fact["category"] == "narration"
+      assert fact["source"] == "companion_bot"
+      assert fact["content"] == text
+    end
+
+    test "the answer is what makes the window stop saying nobody has spoken" do
+      # rpg reads an ask as answered when a fact newer than the note carries the asked
+      # member's name, so the signer is the whole point of the write.
+      script(window([]))
+      answer_with("Nobody here but the water.")
+
+      assert {:ok, _written} = PartyNarrator.narrate(chat_ask())
+      assert_received {:request, @add, %{"source" => "companion_bot"}, _opts}
+    end
+
+    test "a line whose log cannot be read is still answered" do
+      Application.put_env(:bot_army_companion, :answers, %{
+        @context => {:error, :timeout},
+        @add => {:ok, %{"ok" => true, "data" => %{"id" => "fact-3"}}}
+      })
+
+      expect(ReflectionAnswerLlmMock, :answer, fn _system, user, _opts ->
+        refute user =~ "What has already happened"
+        assert user =~ "is anybody in there"
+        {:ok, %{text: "Words from the line alone.", model: "test-model"}}
+      end)
+
+      log = capture_log(fn -> assert {:ok, _written} = PartyNarrator.narrate(chat_ask()) end)
+
+      assert log =~ "the log could not be read"
+      assert_received {:request, @add, _fact, _opts}
+    end
+
+    test "a line nobody said is not answered" do
+      script(window([]))
+
+      for blank <- [%{"content" => ""}, %{"content" => nil}] do
+        log =
+          capture_log(fn ->
+            assert {:error, :no_line} = PartyNarrator.narrate(chat_ask(blank))
+          end)
+
+        assert log =~ "carried none"
+      end
+
+      # Nothing was read either: a line that is not there is not worth a window read.
+      refute_received {:request, _, _, _}
+    end
+
+    test "a line in another member's ask is left alone" do
+      script(window([]))
+
+      log =
+        capture_log(fn ->
+          assert PartyNarrator.narrate(chat_ask(%{"bot_id" => "someone_else"})) == :not_mine
+        end)
+
+      assert log =~ "left alone"
+      refute_received {:request, _, _, _}
+    end
+
+    test "a line in no window is refused, and nothing is read or written" do
+      script(window([]))
+
+      log =
+        capture_log(fn ->
+          assert {:error, :no_session} = PartyNarrator.narrate(chat_ask(%{"session_id" => nil}))
+        end)
+
+      assert log =~ "names no window"
+      refute_received {:request, _, _, _}
+    end
+  end
+
+  describe "chat_prompt/2 — what the model is shown" do
+    test "the place, the table's theme, the window's turns, and the line" do
+      prompt =
+        PartyNarrator.chat_prompt(
+          %{"content" => "where are we", "speaker" => "operator"},
+          {:ok,
+           %{
+             "scene" => "a flooded crypt",
+             "theme" => %{"setting" => "the drowned city", "tone" => "grim"},
+             "turns" => ["second", "first"]
+           }}
+        )
+
+      assert prompt =~ "The place: a flooded crypt"
+      assert prompt =~ "Setting: the drowned city"
+      assert prompt =~ "first\nsecond"
+      assert prompt =~ "What was said, by operator:\nwhere are we"
+      refute prompt =~ "Who acts"
+      refute prompt =~ "The turn to narrate"
+    end
+
+    test "a line with no name on it is still a line" do
+      prompt = PartyNarrator.chat_prompt(%{"content" => "hello"}, :unreadable)
+
+      assert prompt =~ "What was said, by someone at the table:\nhello"
+      assert prompt =~ "The place: an unnamed place"
+    end
+  end
 
   describe "fact_payload/3" do
     test "the name on the words is ours, and no tenant is invented" do
