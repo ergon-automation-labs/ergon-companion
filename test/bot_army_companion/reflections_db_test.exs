@@ -36,7 +36,7 @@ defmodule BotArmyCompanion.ReflectionsDbTest do
     test "her words come back exactly as they went in" do
       text = "  I said I would rest today.\n\n  I did not rest today.  "
 
-      assert {:ok, stored} =
+      assert {:ok, stored, :created} =
                Reflections.capture(%{
                  "text" => text,
                  "prompt" => "How was today?",
@@ -56,7 +56,7 @@ defmodule BotArmyCompanion.ReflectionsDbTest do
 
     test "the newest reflection comes first" do
       for text <- ["first", "second", "third"] do
-        assert {:ok, _view} = Reflections.capture(%{"text" => text})
+        assert {:ok, _view, :created} = Reflections.capture(%{"text" => text})
       end
 
       assert {:ok, rows} = Reflections.list(nil)
@@ -64,7 +64,7 @@ defmodule BotArmyCompanion.ReflectionsDbTest do
     end
 
     test "an unreadable timestamp does not cost her the words" do
-      assert {:ok, stored} =
+      assert {:ok, stored, :created} =
                Reflections.capture(%{"text" => "still hers", "timestamp" => "yesterday-ish"})
 
       assert stored["captured_at"] == nil
@@ -91,7 +91,9 @@ defmodule BotArmyCompanion.ReflectionsDbTest do
 
       assert {:ok, []} = Reflections.list(nil)
 
-      assert {:ok, stored} = Reflections.capture(%{"text" => String.duplicate("a", max)})
+      assert {:ok, stored, :created} =
+               Reflections.capture(%{"text" => String.duplicate("a", max)})
+
       assert stored["chars"] == max
     end
 
@@ -101,8 +103,120 @@ defmodule BotArmyCompanion.ReflectionsDbTest do
       assert_raise Postgrex.Error, fn -> Repo.insert!(%Reflection{}) end
     end
 
+    test "the same key twice stores one reflection, and says which it is" do
+      # The bug this key exists for: a phone fired one press twice, 30 ms apart,
+      # and the store wrote two rows and asked for two answers.
+      assert {:ok, first, :created} =
+               Reflections.capture(%{"text" => "the same press", "dedupe_key" => "draft-1"})
+
+      assert {:ok, second, :existing} =
+               Reflections.capture(%{"text" => "the same press", "dedupe_key" => "draft-1"})
+
+      assert second["id"] == first["id"]
+      assert second["text"] == "the same press"
+      assert {:ok, [_one]} = Reflections.list(nil)
+    end
+
+    test "a key minted for other words never swallows them" do
+      # A key is a handle, not a filter over her words. A caller that reuses one
+      # key for a different sentence loses the key, never the sentence.
+      assert {:ok, first, :created} =
+               Reflections.capture(%{"text" => "A", "dedupe_key" => "reused"})
+
+      assert {:ok, second, :created} =
+               Reflections.capture(%{"text" => "B", "dedupe_key" => "reused"})
+
+      assert second["id"] != first["id"]
+
+      assert {:ok, rows} = Reflections.list(nil)
+      assert Enum.map(rows, & &1["text"]) == ["B", "A"]
+
+      # ...and the key still names the words it was minted for.
+      assert {:ok, again, :existing} =
+               Reflections.capture(%{"text" => "A", "dedupe_key" => "reused"})
+
+      assert again["id"] == first["id"]
+    end
+
+    test "without a key every call is its own reflection, exactly as before" do
+      assert {:ok, one, :created} = Reflections.capture(%{"text" => "same words"})
+      assert {:ok, two, :created} = Reflections.capture(%{"text" => "same words"})
+      assert one["id"] != two["id"]
+      assert {:ok, rows} = Reflections.list(nil)
+      assert length(rows) == 2
+    end
+
+    test "a re-offer re-opens a transport failure, and clears what it left" do
+      assert {:ok, stored, :created} = Reflections.capture(%{"text" => "the answer was lost"})
+
+      assert {:ok, failed} =
+               Reflections.record_answer(
+                 Repo.get!(Reflection, stored["id"]),
+                 {:error, :unavailable}
+               )
+
+      assert failed["answer"]["state"] == "failed"
+      assert failed["answer"]["error"] == "unavailable"
+
+      assert {:ok, reopened} = Reflections.reoffer(stored["id"])
+      assert reopened["id"] == stored["id"]
+      assert reopened["text"] == "the answer was lost"
+      assert reopened["answer"]["state"] == "pending"
+      assert reopened["answer"]["error"] == nil
+      assert reopened["answer"]["text"] == nil
+      assert reopened["answer"]["answered_at"] == nil
+      assert reopened["answer"]["promise_flagged"] == false
+    end
+
+    test "a re-offer with answering switched off opens the row as unasked" do
+      # A row opened as "pending" that nothing is going to answer would be a lie.
+      assert {:ok, stored, :created} = Reflections.capture(%{"text" => "nobody is listening"})
+
+      assert {:ok, _failed} =
+               Reflections.record_answer(Repo.get!(Reflection, stored["id"]), {:error, :timeout})
+
+      assert {:ok, reopened} = Reflections.reoffer(stored["id"], answer_state: "unasked")
+      assert reopened["answer"]["state"] == "unasked"
+      assert reopened["answer"]["error"] == nil
+
+      assert {:error, :bad_answer_state} =
+               Reflections.reoffer(stored["id"], answer_state: "perhaps")
+    end
+
+    test "a reflection the companion already answered is never re-opened" do
+      assert {:ok, stored, :created} = Reflections.capture(%{"text" => "answered once"})
+
+      assert {:ok, _answered} =
+               Reflections.record_answer(
+                 Repo.get!(Reflection, stored["id"]),
+                 {:ok, %{text: "hello", model: "m"}}
+               )
+
+      assert {:error, {:not_failed, "answered"}} = Reflections.reoffer(stored["id"])
+    end
+
+    test "a model verdict is not re-offered, and an unknown row is not found" do
+      assert {:ok, stored, :created} = Reflections.capture(%{"text" => "the model said no"})
+
+      assert {:ok, _failed} =
+               Reflections.record_answer(
+                 Repo.get!(Reflection, stored["id"]),
+                 {:error, :model_failed}
+               )
+
+      assert {:error, {:answer_was_not_transport, "model_failed"}} =
+               Reflections.reoffer(stored["id"])
+
+      assert {:error, :not_found} =
+               Reflections.reoffer("6f6e2f7c-1a2b-4c3d-8e9f-0a1b2c3d4e5f")
+
+      assert {:error, :missing_id} = Reflections.reoffer(nil)
+      assert {:error, :missing_id} = Reflections.reoffer(42)
+      assert {:error, :invalid_id} = Reflections.reoffer("not-a-uuid")
+    end
+
     test "one reflection is read back by id" do
-      assert {:ok, stored} = Reflections.capture(%{"text" => "a single line"})
+      assert {:ok, stored, :created} = Reflections.capture(%{"text" => "a single line"})
       assert {:ok, row} = Reflections.get(stored["id"])
       assert row == stored
     end
@@ -124,7 +238,7 @@ defmodule BotArmyCompanion.ReflectionsDbTest do
 
     test "the limit is honoured, and a bad one is refused rather than defaulted" do
       for text <- ["one", "two", "three"] do
-        assert {:ok, _view} = Reflections.capture(%{"text" => text})
+        assert {:ok, _view, :created} = Reflections.capture(%{"text" => text})
       end
 
       assert {:ok, rows} = Reflections.list(1)

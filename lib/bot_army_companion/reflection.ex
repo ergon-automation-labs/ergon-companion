@@ -33,6 +33,12 @@ defmodule BotArmyCompanion.Reflection do
     field(:prompt, :string)
     field(:captured_at, :utc_datetime_usec)
 
+    # The caller's idempotency key, when it sent one. Not part of what she wrote:
+    # it is there so a second send of the *same* press cannot become a second
+    # reflection (and ask a second answer). The index that backs it is unique —
+    # see the migration — because a check-then-write cannot be raced safely.
+    field(:dedupe_key, :string)
+
     # The answer side. See the migration for what each state means.
     field(:answer_state, :string, default: "pending")
     field(:answer_text, :string)
@@ -59,13 +65,19 @@ defmodule BotArmyCompanion.Reflection do
   The database holds the line for anything that walks past both: `text` is
   `NOT NULL`, so a writer that skips this changeset gets an error rather than a
   wordless row.
+
+  `unique_constraint/2` is the dedupe seam. A stated `dedupe_key` that is already
+  in the table becomes a refusal this module can *read* — instead of a raising
+  constraint error that a caller would have to rescue to tell apart from "the
+  store is down".
   """
   def changeset(reflection, attrs) do
     reflection
-    |> cast(attrs, [:text, :prompt, :captured_at, :answer_state])
+    |> cast(attrs, [:text, :prompt, :captured_at, :answer_state, :dedupe_key])
     |> validate_required([:text])
     |> validate_length(:text, max: @max_text)
     |> validate_inclusion(:answer_state, @answer_states)
+    |> unique_constraint(:dedupe_key, name: :reflections_dedupe_key_index)
   end
 
   @doc """

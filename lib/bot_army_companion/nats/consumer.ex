@@ -78,6 +78,11 @@ defmodule BotArmyCompanion.NATS.Consumer do
       description: "Read one of her captured reflections by id"
     },
     %{
+      subject: "companion.reflections.reoffer",
+      type: :request_reply,
+      description: "Ask the companion to answer a stored reflection again, when nobody ever did"
+    },
+    %{
       subject: "events.llm.job.completed",
       type: :pubsub,
       description:
@@ -453,9 +458,16 @@ defmodule BotArmyCompanion.NATS.Consumer do
     case Jason.decode(msg.body) do
       {:ok, payload} ->
         case store_reflection(payload) do
-          {:ok, view} ->
+          {:ok, view, :created} ->
             Logger.info("Stored a captured reflection (#{view["chars"]} chars, id=#{view["id"]})")
             offer_answer(view["id"])
+
+          {:ok, view, :existing} ->
+            # The same press arrived twice, or a caller re-sent the same draft.
+            # Nothing is lost: the words are on the row that was kept, and one
+            # reflection gets one answer. Say so, rather than dropping a message
+            # silently.
+            Logger.info("A captured reflection arrived twice (id=#{view["id"]}); one row is kept")
 
           {:error, reason} ->
             Logger.warning("Refused a captured reflection: #{Reflections.explain(reason)}")
@@ -468,7 +480,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
     :ok
   end
 
-  # The three verbs reached by `"companion.reflections." <> _`. Each of them
+  # The four verbs reached by `"companion.reflections." <> _`. Each of them
   # answers its caller — a subject we do not recognise gets a refusal rather
   # than a timeout, so a typo in a caller is visible instead of silent.
   defp handle_reflections_request(%{topic: "companion.reflections.capture"} = msg),
@@ -479,6 +491,9 @@ defmodule BotArmyCompanion.NATS.Consumer do
 
   defp handle_reflections_request(%{topic: "companion.reflections.read"} = msg),
     do: handle_reflections_read_request(msg)
+
+  defp handle_reflections_request(%{topic: "companion.reflections.reoffer"} = msg),
+    do: handle_reflections_reoffer_request(msg)
 
   defp handle_reflections_request(msg) do
     Logger.warning("Unknown reflections subject: #{msg.topic}")
@@ -492,10 +507,40 @@ defmodule BotArmyCompanion.NATS.Consumer do
   defp handle_reflections_capture_request(msg) do
     response =
       case store_reflection(decode_body(msg.body)) do
-        {:ok, view} ->
+        {:ok, view, :created} ->
           # Asked before the caller is told, so a screen can read the state off
           # its own reply. In production this returns immediately (the answer is
           # a background job); nothing here waits for a model.
+          offer_answer(view["id"])
+          Reply.ok(%{"reflection" => view})
+
+        {:ok, view, :existing} ->
+          # This caller's key has been seen. The words are already stored, so
+          # nothing is written and *nothing is asked*: a second answer to the same
+          # line is exactly the duplicate this key was added to stop. The caller is
+          # told, so a screen can say "already saved" instead of guessing.
+          Reply.ok(%{"reflection" => view, "duplicate" => true})
+
+        {:error, reason} ->
+          Reply.error(
+            Reflections.explain(reason),
+            refusal_code(reason)
+          )
+      end
+
+    reply(msg, response)
+  end
+
+  defp handle_reflections_reoffer_request(msg) do
+    id = decode_body(msg.body) |> Map.get("id")
+
+    response =
+      case reoffer_reflection(id) do
+        {:ok, view} ->
+          # Fire-and-forget, exactly as for a capture: a failure here must not
+          # become a failure to re-open the question, and the row already says
+          # what it knows. When the answer side is switched off the row was
+          # opened as "unasked", so this stays silent rather than lying.
           offer_answer(view["id"])
           Reply.ok(%{"reflection" => view})
 
@@ -574,6 +619,18 @@ defmodule BotArmyCompanion.NATS.Consumer do
   catch
     kind, reason ->
       Logger.error("Reflection read failed (#{kind}): #{Private.describe(reason)}")
+      {:error, :store_failed}
+  end
+
+  # Re-offering reads and writes the row, so it gets the same discipline as the
+  # other store calls: a database that cannot be reached is `:store_failed`, and
+  # the difference between that and "that reflection already has an answer" is
+  # kept, because a caller that cannot tell them apart will retry the wrong one.
+  defp reoffer_reflection(id) do
+    Reflections.reoffer(id, answer_state: initial_answer_state())
+  catch
+    kind, reason ->
+      Logger.error("Reflection re-offer failed (#{kind}): #{Private.describe(reason)}")
       {:error, :store_failed}
   end
 

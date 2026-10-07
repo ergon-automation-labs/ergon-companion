@@ -102,6 +102,71 @@ defmodule BotArmyCompanion.ReflectionsTest do
     end
   end
 
+  describe "dedupe_key/1 — the caller's handle on one press" do
+    test "a key is kept, without the spacing JSON does not need" do
+      assert Reflections.dedupe_key(%{"text" => "x", "dedupe_key" => " draft-7 "}) == "draft-7"
+    end
+
+    test "no key is not an error, and neither is a malformed one" do
+      # A key is metadata; her words are the payload. Every one of these says
+      # "this caller stated no identity for the capture", which is a fact — and
+      # none of them may cost her the sentence.
+      assert Reflections.dedupe_key(%{"text" => "x"}) == nil
+      assert Reflections.dedupe_key(%{"text" => "x", "dedupe_key" => nil}) == nil
+      assert Reflections.dedupe_key(%{"text" => "x", "dedupe_key" => ""}) == nil
+      assert Reflections.dedupe_key(%{"text" => "x", "dedupe_key" => "   "}) == nil
+      assert Reflections.dedupe_key(%{"text" => "x", "dedupe_key" => 7}) == nil
+      assert Reflections.dedupe_key(%{"text" => "x", "dedupe_key" => %{}}) == nil
+      assert Reflections.dedupe_key("not a map") == nil
+    end
+
+    test "an absurdly long key is dropped, a plain one is kept" do
+      # Not tidiness: a key longer than a btree entry can hold would make the
+      # *insert* fail with a driver error, and a malformed key must never be the
+      # reason her words are lost.
+      assert Reflections.dedupe_key(%{"dedupe_key" => String.duplicate("k", 64)}) !=
+               nil
+
+      assert Reflections.dedupe_key(%{"dedupe_key" => String.duplicate("k", 10_000)}) == nil
+    end
+  end
+
+  describe "reofferable/1 — which failures may be asked again" do
+    test "a request that never landed, and one that ran out of budget" do
+      assert Reflections.reofferable(%Reflection{
+               answer_state: "failed",
+               answer_error: "unavailable"
+             }) ==
+               :ok
+
+      assert Reflections.reofferable(%Reflection{answer_state: "failed", answer_error: "timeout"}) ==
+               :ok
+    end
+
+    test "a verdict about the generation is not a transport failure" do
+      assert Reflections.reofferable(%Reflection{
+               answer_state: "failed",
+               answer_error: "model_failed"
+             }) == {:error, {:answer_was_not_transport, "model_failed"}}
+
+      assert Reflections.reofferable(%Reflection{
+               answer_state: "failed",
+               answer_error: "empty_answer"
+             }) == {:error, {:answer_was_not_transport, "empty_answer"}}
+    end
+
+    test "an answer that exists, is coming, or was never asked for is not re-opened" do
+      assert Reflections.reofferable(%Reflection{answer_state: "answered"}) ==
+               {:error, {:not_failed, "answered"}}
+
+      assert Reflections.reofferable(%Reflection{answer_state: "pending"}) ==
+               {:error, {:not_failed, "pending"}}
+
+      assert Reflections.reofferable(%Reflection{answer_state: "unasked"}) ==
+               {:error, {:not_failed, "unasked"}}
+    end
+  end
+
   describe "view/1 — what a reader is told" do
     test "her words, the counts, and the two different times" do
       row = %Reflection{
@@ -149,7 +214,12 @@ defmodule BotArmyCompanion.ReflectionsTest do
         :invalid_id,
         :bad_answer_state,
         :invalid,
-        :store_failed
+        :store_failed,
+        {:not_failed, "answered"},
+        {:not_failed, "pending"},
+        {:not_failed, "unasked"},
+        {:not_failed, "something else"},
+        {:answer_was_not_transport, "model_failed"}
       ]
 
       for reason <- reasons do
@@ -163,6 +233,17 @@ defmodule BotArmyCompanion.ReflectionsTest do
       # is not there must not all hear the same answer.
       assert Reflections.explain(:missing_id) != Reflections.explain(:invalid_id)
       assert Reflections.explain(:invalid_id) != Reflections.explain(:not_found)
+
+      # A refused re-offer has to say which fact stopped it: four states, four
+      # sentences, because "no" on its own teaches the caller nothing.
+      assert Reflections.explain({:not_failed, "answered"}) !=
+               Reflections.explain({:not_failed, "pending"})
+
+      assert Reflections.explain({:not_failed, "pending"}) !=
+               Reflections.explain({:not_failed, "unasked"})
+
+      assert Reflections.explain({:answer_was_not_transport, "model_failed"}) !=
+               Reflections.explain({:not_failed, "unasked"})
     end
 
     test "the ceiling is named in the sentence that refuses it" do

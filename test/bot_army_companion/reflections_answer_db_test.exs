@@ -36,7 +36,7 @@ defmodule BotArmyCompanion.ReflectionsAnswerDbTest do
     end
 
     defp capture(text, opts \\ []) do
-      assert {:ok, view} = Reflections.capture(%{"text" => text}, opts)
+      assert {:ok, view, :created} = Reflections.capture(%{"text" => text}, opts)
       view
     end
 
@@ -136,7 +136,7 @@ defmodule BotArmyCompanion.ReflectionsAnswerDbTest do
         {:ok, %{text: "That is a lot to carry.", model: "test-model"}}
       end)
 
-      assert {:ok, captured} =
+      assert {:ok, captured, :created} =
                Reflections.capture(%{
                  "text" => "  I said I would rest.  ",
                  "prompt" => "How was today?"
