@@ -63,15 +63,21 @@ deps:
 _compile-impl:
 	@LOG_FILE="/tmp/compile-companion-$$(date +%s).log"; \
 	echo "Compiling Companion and logging to $$LOG_FILE..."; \
+	set -o pipefail; \
 	$(MIX) compile 2>&1 | tee "$$LOG_FILE"; \
-	echo "✓ Compilation log: $$LOG_FILE"
+	rc=$$?; \
+	echo "✓ Compilation log: $$LOG_FILE"; \
+	exit $$rc
 
 test:
 	@BOT_NAME=companion; \
 	LOG_FILE="/tmp/test-$${BOT_NAME}-$$(date +%s).log"; \
 	echo "Running tests and logging to $$LOG_FILE..."; \
+	set -o pipefail; \
 	$(MIX) test 2>&1 | tee "$$LOG_FILE"; \
-	echo "✓ Test log: $$LOG_FILE"
+	rc=$$?; \
+	echo "✓ Test log: $$LOG_FILE"; \
+	exit $$rc
 
 test-handlers:
 	MIX_ENV=test $(MIX) test --only handlers --trace
