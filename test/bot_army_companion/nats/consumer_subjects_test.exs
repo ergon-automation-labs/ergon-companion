@@ -95,3 +95,39 @@ defmodule BotArmyCompanion.NATS.ConsumerSubjectsTest do
     refute "rpg.narration.your_turn" in advertised
   end
 end
+
+defmodule BotArmyCompanion.NATS.ConsumerConnectRoleTest do
+  @moduledoc """
+  Which role the consumer serves with when it connects.
+
+  The consumer starts in `:standby` so an unelected node never answers business
+  traffic. But `LeaderElection` is started *before* the consumer and announces
+  the applied role by cast — when a restarted bot still holds its KV lease the
+  election applies `:primary` during boot, the cast lands on a name nobody has
+  registered yet and is dropped, and the node then serves nothing at all: the
+  reflect screens' `companion.reflections.list` had no responder for 23 minutes
+  on 2026-10-20. The default must not outrank a reading of the applied role.
+  """
+
+  use ExUnit.Case, async: true
+
+  @moduletag :nats
+
+  alias BotArmyCompanion.NATS.Consumer
+
+  test "a node the election already made primary serves, even though it started standby" do
+    assert Consumer.connect_role(:standby, %{role: :primary, is_leader: true}) == :primary
+  end
+
+  test "a standby reading is honoured — two nodes must not both answer" do
+    assert Consumer.connect_role(:standby, %{role: :standby, is_leader: false}) == :standby
+  end
+
+  test "an unknown reading keeps the cautious default" do
+    assert Consumer.connect_role(:standby, %{role: :unknown, is_leader: false}) == :standby
+  end
+
+  test "a node that already decided primary stays primary" do
+    assert Consumer.connect_role(:primary, %{role: :unknown, is_leader: false}) == :primary
+  end
+end

@@ -149,7 +149,8 @@ defmodule BotArmyCompanion.NATS.Consumer do
 
   defp handle_nats_connected(conn, state) do
     BotArmyLibraryRuntime.NATS.Connection.subscribe_to_status()
-    state = %{state | conn: conn}
+    role = connect_role(state.role, leader_status())
+    state = %{state | conn: conn, role: role}
 
     if state.role == :primary do
       subscribe_business_subjects(state)
@@ -157,6 +158,29 @@ defmodule BotArmyCompanion.NATS.Consumer do
       Logger.info("Companion consumer standby — not subscribing to business subjects")
       {:noreply, register_with_role(%{state | subscriptions: []})}
     end
+  end
+
+  @doc """
+  The role to serve with, given the role we started with and what the election
+  says right now.
+
+  `init/1` defaults to `:standby` so a not-yet-elected node never answers
+  business traffic. That default is wrong when the election already applied
+  `:primary` *before* this process existed — its `on_role_change` cast goes to a
+  name nobody has registered yet and is dropped, and the node serves nothing
+  until the next role transition (observed 2026-10-20: a restart while the bot
+  still held its KV lease announced primary during boot, six milliseconds
+  before the consumer connected, and every reflection request went unanswered).
+  The applied role is a reading, so ask for it rather than trusting the default.
+  """
+  def connect_role(:primary, _status), do: :primary
+  def connect_role(_role, %{role: :primary}), do: :primary
+  def connect_role(_role, _status), do: :standby
+
+  defp leader_status do
+    BotArmyLibraryRuntime.LeaderElection.get_status("companion")
+  catch
+    _kind, _reason -> %{role: :unknown, is_leader: false}
   end
 
   defp subscribe_business_subjects(state) do
