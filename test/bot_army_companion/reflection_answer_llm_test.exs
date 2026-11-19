@@ -31,7 +31,10 @@ defmodule BotArmyCompanion.ReflectionAnswerLlmTest do
     # The same job id as the test's `@job`: a nested module cannot see it.
     @job "5f1c9a34-0d6e-4c1e-8f2a-77c1d3a9c4b1"
 
-    def request("llm.request.chat", _payload, _opts), do: {:ok, %{"job_id" => @job}}
+    def request("llm.request.chat", payload, _opts) do
+      send(self(), {:submitted, payload})
+      {:ok, %{"job_id" => @job}}
+    end
 
     def request("llm.job.status", payload, _opts), do: status(payload["job_id"])
 
@@ -170,6 +173,21 @@ defmodule BotArmyCompanion.ReflectionAnswerLlmTest do
     # would be woken for a job whose answer has already been recorded.
     assert :ok = JobBell.ring(@job)
     refute_received {:job_bell, _job_id}
+  end
+
+  test "the request names the uncensored tier when one is configured, and nothing when not" do
+    script([:completed])
+    assert {:ok, _} = answer(model_type: "uncensored", uncensored_tier: "light")
+    assert_received {:submitted, payload}
+    assert payload["model_type"] == "uncensored"
+    assert payload["uncensored_tier"] == "light"
+    refute Map.has_key?(payload, "model")
+    refute Map.has_key?(payload, "ollama_node")
+
+    script([:completed])
+    assert {:ok, _} = answer(model_type: "uncensored")
+    assert_received {:submitted, payload}
+    refute Map.has_key?(payload, "uncensored_tier")
   end
 
   defp script(steps), do: Process.put(:status_script, steps)

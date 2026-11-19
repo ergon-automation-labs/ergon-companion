@@ -96,6 +96,12 @@ defmodule BotArmyCompanion.ReflectionAnswer.Llm.Nats do
       "async" => true
     }
 
+    payload =
+      case Keyword.get(opts, :uncensored_tier) do
+        tier when is_binary(tier) and tier != "" -> Map.put(payload, "uncensored_tier", tier)
+        _ -> payload
+      end
+
     case submit(payload, opts) do
       {:ok, job_id} -> await(job_id, deadline, opts)
       {:error, code} -> {:error, code}

@@ -70,6 +70,9 @@ defmodule BotArmyCompanion.ReflectionAnswer do
     subject: "llm.request.chat",
     status_subject: "llm.job.status",
     model_type: "uncensored",
+    # Which of the pillar's uncensored options answers (`llm:uncensored_tiers`): a reflection is a short
+    # reply, so `light`. The model and its node are the pillar's; this bot names neither.
+    uncensored_tier: "light",
     lane: "interactive",
     max_tokens: 900,
     # The lane's own life: the llm bot holds a finished job for an hour. See the
@@ -308,6 +311,7 @@ defmodule BotArmyCompanion.ReflectionAnswer do
         subject: settings[:subject],
         status_subject: settings[:status_subject],
         model_type: settings[:model_type],
+        uncensored_tier: settings[:uncensored_tier],
         lane: settings[:lane],
         max_tokens: settings[:max_tokens],
         budget_ms: settings[:budget_ms],

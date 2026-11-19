@@ -95,6 +95,7 @@ defmodule BotArmyCompanion.ReflectionAnswerTest do
       expect(ReflectionAnswerLlmMock, :answer, fn _system, user, opts ->
         assert user =~ "I am tired"
         assert opts[:model_type] == "uncensored"
+        assert opts[:uncensored_tier] == "light"
         assert opts[:lane] == "interactive"
         assert opts[:max_tokens] == 900
         assert opts[:subject] == "llm.request.chat"
