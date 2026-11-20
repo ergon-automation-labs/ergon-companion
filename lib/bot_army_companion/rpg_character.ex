@@ -8,20 +8,20 @@ defmodule BotArmyCompanion.RpgCharacter do
 
   require Logger
 
-  @bot_id "companion"
-
   @spec provision() :: {:ok, map()} | {:error, term()}
   def provision do
-    case helper().ensure(@bot_id) do
+    case helper().ensure(bot_id()) do
       {:ok, character} = ok ->
-        Logger.info("[RpgCharacter] #{@bot_id} is #{character["name"]} the #{character["class"]}")
+        Logger.info("[RpgCharacter] #{bot_id()} is #{character["name"]} the #{character["class"]}")
         ok
 
       {:error, reason} = error ->
-        Logger.warning("[RpgCharacter] #{@bot_id} has no character yet: #{inspect(reason)}")
+        Logger.warning("[RpgCharacter] #{bot_id()} has no character yet: #{inspect(reason)}")
         error
     end
   end
+
+  defp bot_id, do: BotArmyCompanion.PartyNarrator.bot_id()
 
   defp helper do
     Application.get_env(
