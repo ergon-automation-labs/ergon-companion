@@ -96,6 +96,10 @@ defmodule BotArmyCompanion.ReflectionAnswer do
     # Thirty seconds costs nothing when the lane is fast and buys the margin the
     # companion's own workload needs.
     status_timeout_ms: 30_000,
+    # Seal her words to the llm bot (BotArmyCompanion.Sealed). Off by default so a node with
+    # no key keeps answering; production turns it on with COMPANION_SEAL_LLM (config/runtime.exs),
+    # and then a missing key refuses rather than sending plain.
+    seal: false,
     promise_retries: 1,
     llm: BotArmyCompanion.ReflectionAnswer.Llm.Nats
   ]
@@ -317,7 +321,8 @@ defmodule BotArmyCompanion.ReflectionAnswer do
         budget_ms: settings[:budget_ms],
         poll_ms: settings[:poll_ms],
         submit_timeout_ms: settings[:submit_timeout_ms],
-        status_timeout_ms: settings[:status_timeout_ms]
+        status_timeout_ms: settings[:status_timeout_ms],
+        seal: settings[:seal]
       ],
       overrides
     )

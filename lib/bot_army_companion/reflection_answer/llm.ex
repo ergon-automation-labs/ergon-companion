@@ -102,11 +102,53 @@ defmodule BotArmyCompanion.ReflectionAnswer.Llm.Nats do
         _ -> payload
       end
 
-    case submit(payload, opts) do
-      {:ok, job_id} -> await(job_id, deadline, opts)
-      {:error, code} -> {:error, code}
+    with {:ok, payload, unseal} <- maybe_seal(payload, opts),
+         {:ok, job_id} <- submit(payload, opts) do
+      with {:ok, result} <- await(job_id, deadline, opts), do: unseal.(result)
     end
   end
+
+  # With `seal: true` her words (system and messages) travel inside a sealed envelope
+  # (BotArmyCompanion.Sealed, llm >= 0.12.0) and the answer is opened on the way back.
+  # No key, or any sealing failure, refuses the request: it is never sent in plain text.
+  defp maybe_seal(payload, opts) do
+    if Keyword.get(opts, :seal, false) do
+      rid = UUID.uuid4()
+      kid = BotArmyCompanion.Sealed.current_kid()
+      inner = Map.take(payload, ["system", "messages"])
+
+      case BotArmyCompanion.Sealed.seal(inner, kid, BotArmyCompanion.Sealed.aad(:request, rid)) do
+        {:ok, env} ->
+          sealed =
+            payload
+            |> Map.drop(["system", "messages"])
+            |> Map.merge(%{"request_id" => rid, "sealed" => env})
+
+          {:ok, sealed, &open_answer(&1, rid)}
+
+        {:error, reason} ->
+          Logger.warning("[companion] sealing refused, nothing sent: #{inspect(reason)}")
+          {:error, :unavailable}
+      end
+    else
+      {:ok, payload, &{:ok, &1}}
+    end
+  end
+
+  defp open_answer(%{text: {:sealed, env}} = answer, rid) do
+    case BotArmyCompanion.Sealed.open(env, BotArmyCompanion.Sealed.aad(:response, rid)) do
+      {:ok, %{"content" => text}} when is_binary(text) and text != "" ->
+        {:ok, %{answer | text: text}}
+
+      {:ok, _} ->
+        {:error, :empty_answer}
+
+      {:error, _} ->
+        {:error, :model_failed}
+    end
+  end
+
+  defp open_answer(answer, _rid), do: {:ok, answer}
 
   # A registry that is not running (a hermetic test, an eval) is not a failure:
   # the waiter polls as it always did, only slower.
@@ -202,6 +244,10 @@ defmodule BotArmyCompanion.ReflectionAnswer.Llm.Nats do
 
   # A completed job whose result carries no words is not an answer. Storing an
   # empty string would make the row say "answered" about silence.
+  # A sealed answer is carried out as-is and opened by the caller that sealed it.
+  defp take_result(%{"sealed" => %{} = env} = result),
+    do: {:ok, %{text: {:sealed, env}, model: Map.get(result, "model_used")}}
+
   defp take_result(result) when is_map(result) do
     text = Map.get(result, "content")
 
