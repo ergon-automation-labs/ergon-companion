@@ -26,6 +26,8 @@ defmodule BotArmyCompanion.Application do
     config_data = BotArmyLibraryRuntime.ConfigLoader.load_config()
     Application.put_env(:bot_army_library_runtime, :config_data, config_data)
 
+    if @env != :test, do: Task.start(&BotArmyCompanion.RpgCharacter.provision/0)
+
     children =
       [
         # Waiters for llm bot jobs register here; the consumer rings it when a
