@@ -133,16 +133,59 @@ defmodule BotArmyCompanion.LettersMissionTest do
 
   # -- write_new/1 ----------------------------------------------------------------------
 
+  @good_letter String.trim("""
+               Abby,
+
+               The roof was cold and the contact never came. I talked first, because I always do, and it fell flat. Then Mara tried the net and slipped, and Kira's plea got rerouted into a wall of firewall. Three of us, three misses.
+
+               I liked it anyway. Nobody on that roof stopped trying, and I would take Mara and Kira with me again.
+
+               What was the best part of your day?
+
+               Eir
+               """)
+
   defmodule Llm do
     @moduledoc false
+    # Two kinds of call, told apart by the system prompt: the drafter (and the rewriter) and the
+    # editor. Each answers from a script in the process dictionary: a list is consumed, its last
+    # element repeating, so a test says what happens first and what happens after.
     def answer(system, user, opts) do
-      send(Process.get(:test_pid), {:asked, system, user, opts})
-      Process.get(:llm_reply, {:ok, %{text: "Dear Abby, the roof was cold. Eir", model: "m"}})
+      pid = Process.get(:test_pid)
+
+      if String.contains?(system, "You are an editor") do
+        send(pid, {:graded, system, user, opts})
+
+        next(
+          :grades,
+          {:ok,
+           %{
+             text:
+               ~s({"faithful": true, "invented": [], "voice": 4, "excitement": 4, "clarity": 4, "notes": ""})
+           }}
+        )
+      else
+        send(pid, {:asked, system, user, opts})
+
+        next(
+          :drafts,
+          Process.get(:llm_reply, {:ok, %{text: Process.get(:good_letter), model: "m"}})
+        )
+      end
+    end
+
+    defp next(key, default) do
+      case Process.get(key) do
+        [last] -> last
+        [head | rest] -> Process.put(key, rest) && head
+        _ -> default
+      end
     end
   end
 
   defp setup_world(attrs \\ %{}) do
     Process.put(:test_pid, self())
+    Process.put(:good_letter, @good_letter)
     Process.put(:stored, [])
     Process.put(:told, MapSet.new())
 
@@ -179,7 +222,7 @@ defmodule BotArmyCompanion.LettersMissionTest do
       leader: "companion_bot",
       leader?: fn -> true end,
       ready?: fn -> true end,
-      now: ~U[2026-11-21 10:00:00Z]
+      now: ~U[2026-11-22 00:00:00Z]
     ]
   end
 
@@ -242,13 +285,10 @@ defmodule BotArmyCompanion.LettersMissionTest do
     end
 
     test "what is stored is the model's own letter, trimmed" do
-      Process.put(
-        :llm_reply,
-        {:ok, %{text: "\n  Dear Abby, the roof was cold. Eir  \n", model: "m"}}
-      )
-
+      Process.put(:llm_reply, {:ok, %{text: "\n  " <> @good_letter <> "  \n", model: "m"}})
       Mission.write_new(setup_world() ++ [max_per_pass: 1])
-      assert [{"m1", "Dear Abby, the roof was cold. Eir"}] = Process.get(:stored)
+      assert [{"m1", text}] = Process.get(:stored)
+      assert text == @good_letter
     end
 
     test "only the primary writes: a standby asks nothing and writes nothing" do
@@ -350,6 +390,273 @@ defmodule BotArmyCompanion.LettersMissionTest do
       opts = Keyword.delete(setup_world(), :since)
       assert {:error, :no_cutoff} = Mission.write_new(opts)
       refute_received {:rpg, "recent", _}
+    end
+  end
+
+  describe "the grader, before a letter is stored" do
+    defp bad_draft, do: String.replace(@good_letter, "roof was cold", "**roof** was cold")
+
+    defp grade(overrides \\ %{}) do
+      body =
+        Map.merge(
+          %{
+            "faithful" => true,
+            "invented" => [],
+            "voice" => 4,
+            "excitement" => 4,
+            "clarity" => 4,
+            "notes" => ""
+          },
+          overrides
+        )
+
+      {:ok, %{text: Jason.encode!(body)}}
+    end
+
+    defp calls(tag) do
+      Stream.repeatedly(fn ->
+        receive do
+          m when elem(m, 0) == tag -> m
+        after
+          0 -> nil
+        end
+      end)
+      |> Enum.take_while(& &1)
+    end
+
+    test "a clean letter with a good grade is stored after one draft and one grade" do
+      assert {:ok, [{"m1", :written}]} = Mission.write_new(setup_world() ++ [max_per_pass: 1])
+
+      assert length(calls(:asked)) == 1
+      assert length(calls(:graded)) == 1
+      assert [{"m1", @good_letter}] = Process.get(:stored)
+    end
+
+    test "the editor is shown the letter that would be sent, with her soul and the record" do
+      Mission.write_new(setup_world() ++ [max_per_pass: 1])
+
+      assert_received {:graded, system, user, opts}
+      assert system =~ "A pen pal who writes back."
+      assert user =~ "The roof was cold and the contact never came."
+      assert user =~ "Round 1: Eir (you) tried to persuade"
+      assert opts[:seal] == true
+      assert opts[:think] == false
+    end
+
+    test "a draft that breaks a rule is rewritten without troubling the editor, and the rewrite is what is stored" do
+      opts = setup_world() ++ [max_per_pass: 1]
+      Process.put(:drafts, [{:ok, %{text: bad_draft()}}, {:ok, %{text: @good_letter}}])
+
+      assert {:ok, [{"m1", :written}]} = Mission.write_new(opts)
+
+      assert [{:asked, _, first_user, _}, {:asked, _, rewrite_user, _}] = calls(:asked)
+      refute first_user =~ "Your first draft"
+      assert rewrite_user =~ "Your first draft:"
+      assert rewrite_user =~ "**roof** was cold"
+      assert rewrite_user =~ "Write plain prose"
+      assert rewrite_user =~ "The mission you were sent on."
+
+      assert length(calls(:graded)) == 1
+      assert [{"m1", @good_letter}] = Process.get(:stored)
+    end
+
+    test "a letter the editor finds invented is rewritten, told what to remove" do
+      opts = setup_world() ++ [max_per_pass: 1]
+
+      Process.put(:grades, [
+        grade(%{"faithful" => false, "invented" => ["a dragon over the roof"]}),
+        grade()
+      ])
+
+      assert {:ok, [{"m1", :written}]} = Mission.write_new(opts)
+
+      assert [_, {:asked, _, rewrite_user, _}] = calls(:asked)
+      assert rewrite_user =~ "a dragon over the roof"
+      assert rewrite_user =~ "Remove them"
+      assert length(calls(:graded)) == 2
+    end
+
+    test "a weak score is rewritten with the editor's own notes" do
+      opts = setup_world() ++ [max_per_pass: 1]
+      Process.put(:grades, [grade(%{"excitement" => 2, "notes" => "Open on the cold."}), grade()])
+
+      assert {:ok, [{"m1", :written}]} = Mission.write_new(opts)
+      assert [_, {:asked, _, rewrite_user, _}] = calls(:asked)
+      assert rewrite_user =~ "excitement"
+      assert rewrite_user =~ "Open on the cold."
+    end
+
+    test "the bar is configurable" do
+      opts = setup_world() ++ [max_per_pass: 1, min_score: 5]
+      assert {:ok, [{"m1", {:failed, :not_good_enough}}]} = Mission.write_new(opts)
+      assert Process.get(:stored) == []
+    end
+
+    test "a letter that never gets good enough is held, after a bounded number of rewrites" do
+      opts = setup_world() ++ [max_per_pass: 1]
+      Process.put(:drafts, [{:ok, %{text: bad_draft()}}])
+
+      assert {:ok, [{"m1", {:failed, :not_good_enough}}]} = Mission.write_new(opts)
+
+      # the draft and two rewrites, never more
+      assert length(calls(:asked)) == 3
+      assert Process.get(:stored) == []
+    end
+
+    test "the number of rewrites is configurable, and zero holds a letter that fails once" do
+      opts = setup_world() ++ [max_per_pass: 1, max_revisions: 0]
+      Process.put(:drafts, [{:ok, %{text: bad_draft()}}])
+
+      assert {:ok, [{"m1", {:failed, :not_good_enough}}]} = Mission.write_new(opts)
+      assert length(calls(:asked)) == 1
+    end
+
+    test "an editor that cannot be read twice in a row holds the letter: no grade, no send" do
+      opts = setup_world() ++ [max_per_pass: 1]
+      Process.put(:grades, [{:ok, %{text: "I think it is nice!"}}])
+
+      assert {:ok, [{"m1", {:failed, :ungradable}}]} = Mission.write_new(opts)
+      assert length(calls(:graded)) == 2
+      assert Process.get(:stored) == []
+    end
+
+    test "an editor that is unreadable once and fine the second time is fine" do
+      opts = setup_world() ++ [max_per_pass: 1]
+      Process.put(:grades, [{:ok, %{text: "hm"}}, grade()])
+
+      assert {:ok, [{"m1", :written}]} = Mission.write_new(opts)
+      assert length(calls(:graded)) == 2
+    end
+
+    test "an editor that cannot answer holds the letter, and is a failure of the model, not of the letter" do
+      opts = setup_world() ++ [max_per_pass: 1]
+      Process.put(:grades, [{:error, :unavailable}])
+
+      assert {:ok, [{"m1", {:failed, :unavailable}}]} = Mission.write_new(opts)
+      assert Process.get(:stored) == []
+    end
+
+    test "the editor may be a stronger tier than the writer, by configuration" do
+      Mission.write_new(setup_world() ++ [max_per_pass: 1, grader_tier: "heavy"])
+
+      assert_received {:asked, _, _, draft_opts}
+      assert_received {:graded, _, _, grade_opts}
+      assert draft_opts[:uncensored_tier] == "light"
+      assert grade_opts[:uncensored_tier] == "heavy"
+    end
+
+    test "a rewrite that comes back empty ends that mission's attempt, not the pass" do
+      opts = setup_world() ++ [max_per_pass: 2]
+
+      Process.put(:drafts, [
+        {:ok, %{text: bad_draft()}},
+        {:ok, %{text: "  "}},
+        {:ok, %{text: @good_letter}}
+      ])
+
+      assert {:ok, [{"m1", {:failed, :empty_answer}}, {"m2", :written}]} = Mission.write_new(opts)
+    end
+
+    test "nothing of a letter, the record or the editor's words reaches the log" do
+      Process.put(:drafts, [{:ok, %{text: bad_draft()}}])
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          Mission.write_new(setup_world() ++ [max_per_pass: 1, max_revisions: 0])
+        end)
+
+      Process.put(:drafts, [{:ok, %{text: @good_letter}}])
+
+      Process.put(:grades, [
+        grade(%{"faithful" => false, "invented" => ["a SECRET-DRAGON"], "notes" => "SECRET-NOTE"})
+      ])
+
+      log2 =
+        ExUnit.CaptureLog.capture_log(fn ->
+          Mission.write_new(setup_world() ++ [max_per_pass: 1, max_revisions: 0])
+        end)
+
+      for text <- [log, log2] do
+        refute text =~ "SECRET"
+        refute text =~ "roof"
+        refute text =~ "Mara"
+      end
+
+      assert log =~ "not good enough"
+      assert log =~ "markdown"
+    end
+  end
+
+  describe "the pen pal's timing: a mission letter arrives when a letter would" do
+    defp ended(opts, at) do
+      recent = %{"missions" => [%{"session_id" => "m1", "ended_at" => at, "turns" => 3}]}
+
+      Keyword.put(opts, :rpg, fn
+        "rpg.mission.recent", _ -> {:ok, recent}
+        "rpg.mission.debrief", _ -> {:ok, @debrief}
+      end)
+    end
+
+    # 2026-11-21 07:08Z is 00:08 in Denver: overnight, so it arrives at 07:30 Denver, 14:30Z.
+    test "an overnight mission waits for the morning" do
+      opts = setup_world() |> ended("2026-11-21T07:08:41Z")
+
+      assert {:ok, []} = Mission.write_new(Keyword.put(opts, :now, ~U[2026-11-21 14:29:00Z]))
+      refute_received {:asked, _, _, _}
+
+      assert {:ok, [{"m1", :written}]} =
+               Mission.write_new(Keyword.put(opts, :now, ~U[2026-11-21 14:30:00Z]))
+    end
+
+    # 2026-11-21 18:00Z is 11:00 in Denver: daytime, so a few hours later.
+    test "a daytime mission waits a few hours" do
+      opts = setup_world() |> ended("2026-11-21T18:00:00Z")
+
+      assert {:ok, []} = Mission.write_new(Keyword.put(opts, :now, ~U[2026-11-21 20:59:00Z]))
+
+      assert {:ok, [{"m1", :written}]} =
+               Mission.write_new(Keyword.put(opts, :now, ~U[2026-11-21 21:00:00Z]))
+    end
+
+    test "a mission that is not due asks nothing of the model and fetches no debrief" do
+      opts = setup_world() |> ended("2026-11-21T18:00:00Z")
+      assert {:ok, []} = Mission.write_new(Keyword.put(opts, :now, ~U[2026-11-21 18:00:01Z]))
+
+      refute_received {:asked, _, _, _}
+      refute_received {:graded, _, _, _}
+      refute_received {:rpg, "debrief", _}
+    end
+
+    test "a mission with no readable end time is not told" do
+      for bad <- [nil, "", "yesterday", 5] do
+        opts = setup_world() |> ended(bad)
+        assert {:ok, []} = Mission.write_new(opts)
+      end
+    end
+
+    test "what is due goes first even when a later one is not due yet" do
+      recent = %{
+        "missions" => [
+          %{"session_id" => "late", "ended_at" => "2026-11-21T20:00:00Z", "turns" => 3},
+          %{"session_id" => "early", "ended_at" => "2026-11-21T07:00:00Z", "turns" => 3}
+        ]
+      }
+
+      opts =
+        Keyword.put(setup_world(), :rpg, fn
+          "rpg.mission.recent", _ -> {:ok, recent}
+          "rpg.mission.debrief", _ -> {:ok, @debrief}
+        end)
+
+      assert {:ok, [{"early", :written}]} =
+               Mission.write_new(Keyword.put(opts, :now, ~U[2026-11-21 15:00:00Z]))
+    end
+  end
+
+  describe "skip" do
+    test "a mission named to be skipped is not written, and costs nothing" do
+      assert {:ok, [{"m2", :written}]} =
+               Mission.write_new(setup_world() ++ [max_per_pass: 1, skip: ["m1"]])
     end
   end
 end

@@ -23,11 +23,33 @@ defmodule BotArmyCompanion.LettersMissionDbTest do
 
   @soul %{"identity" => %{"name" => "Eir"}, "character" => "A pen pal.", "tone" => "warm"}
 
+  @good_letter String.trim("""
+               Abby,
+
+               The roof was cold and the contact never came. I talked first, because I always do, and it fell flat. Then Mara tried the net and slipped, and Kira's plea got rerouted into a wall of firewall. Three of us, three misses.
+
+               I liked it anyway. Nobody on that roof stopped trying, and I would take Mara and Kira with me again.
+
+               What was the best part of your day?
+
+               Eir
+               """)
+
   defmodule Llm do
     @moduledoc false
+    # The writer's draft and the editor's grade, told apart by the system prompt.
     def answer(system, user, _opts) do
       send(Process.get(:test_pid), {:asked, system, user})
-      {:ok, %{text: "Dear Abby, I read it twice. Eir", model: "m"}}
+
+      if String.contains?(system, "You are an editor") do
+        {:ok,
+         %{
+           text:
+             ~s({"faithful": true, "invented": [], "voice": 4, "excitement": 4, "clarity": 4, "notes": ""})
+         }}
+      else
+        {:ok, %{text: Process.get(:letter), model: "m"}}
+      end
     end
   end
 
@@ -36,6 +58,7 @@ defmodule BotArmyCompanion.LettersMissionDbTest do
 
     setup do
       Process.put(:test_pid, self())
+      Process.put(:letter, @good_letter)
       System.put_env("LETTERS_SEALED_KEYS", Jason.encode!(%{"letters1" => @key}))
       on_exit(fn -> System.delete_env("LETTERS_SEALED_KEYS") end)
 
@@ -125,7 +148,11 @@ defmodule BotArmyCompanion.LettersMissionDbTest do
           {:ok,
            %{
              "scene" => "A roof.",
-             "party" => [%{"name" => "Eir", "bot_id" => "companion_bot"}],
+             "party" => [
+               %{"name" => "Eir", "bot_id" => "companion_bot"},
+               %{"name" => "Mara Voss", "bot_id" => "gtd_bot"},
+               %{"name" => "Kira \"Ghost\" Tanaka", "bot_id" => "llm_bot"}
+             ],
              "turns" => [
                %{"round" => 1, "name" => "Eir", "action" => "persuade", "outcome" => "success"}
              ],
@@ -148,10 +175,49 @@ defmodule BotArmyCompanion.LettersMissionDbTest do
 
       assert {:ok, [view]} = Letters.thread(now: @now)
       assert view["author"] == "eir"
-      assert view["text"] == "Dear Abby, I read it twice. Eir"
+      assert view["text"] == @good_letter
 
       assert Repo.aggregate(from(l in Letter, where: like(l.dedupe_key, "mission:%")), :count) ==
                1
+    end
+
+    test "a letter that is not good enough is held: nothing reaches the table" do
+      Process.put(:letter, "**Hi.** Short.")
+
+      rpg = fn
+        "rpg.mission.recent", _ ->
+          {:ok,
+           %{
+             "missions" => [
+               %{"session_id" => "m1", "ended_at" => "2026-11-21T07:00:00Z", "turns" => 1}
+             ]
+           }}
+
+        "rpg.mission.debrief", _ ->
+          {:ok,
+           %{
+             "scene" => "A roof.",
+             "party" => [%{"name" => "Eir", "bot_id" => "companion_bot"}],
+             "turns" => [
+               %{"round" => 1, "name" => "Eir", "action" => "persuade", "outcome" => "success"}
+             ],
+             "story" => []
+           }}
+      end
+
+      opts = [
+        rpg: rpg,
+        soul: fn -> {:ok, @soul} end,
+        llm: Llm,
+        leader?: fn -> true end,
+        ready?: fn -> true end,
+        since: "2026-11-21T00:00:00Z",
+        now: @now
+      ]
+
+      assert {:ok, [{"m1", {:failed, :not_good_enough}}]} = Mission.write_new(opts)
+      assert Repo.aggregate(Letter, :count) == 0
+      refute Mission.told?("m1")
     end
   end
 end

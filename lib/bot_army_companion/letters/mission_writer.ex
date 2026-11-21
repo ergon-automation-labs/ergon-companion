@@ -16,7 +16,7 @@ defmodule BotArmyCompanion.Letters.MissionWriter do
   ## Settings
 
   `config :bot_army_companion, :letters, mission: [enabled: true, interval_ms: 600_000,
-  max_per_pass: 2, since: nil]`. A setting that is not usable falls back to its default rather than
+  max_per_pass: 2, max_tries: 3, since: nil]`. A setting that is not usable falls back to its default rather than
   stopping the clock.
   """
 
@@ -28,6 +28,7 @@ defmodule BotArmyCompanion.Letters.MissionWriter do
 
   @default_interval_ms 600_000
   @default_max_per_pass 2
+  @default_max_tries 3
   # The first pass waits a little, so the leader election has settled before anything asks who leads.
   @first_pass_ms 120_000
 
@@ -36,6 +37,7 @@ defmodule BotArmyCompanion.Letters.MissionWriter do
           enabled: boolean(),
           interval_ms: pos_integer(),
           max_per_pass: pos_integer(),
+          max_tries: pos_integer(),
           since: String.t() | nil
         }
   def settings do
@@ -45,6 +47,7 @@ defmodule BotArmyCompanion.Letters.MissionWriter do
       enabled: Keyword.get(cfg, :enabled, true) != false,
       interval_ms: positive(Keyword.get(cfg, :interval_ms), @default_interval_ms),
       max_per_pass: positive(Keyword.get(cfg, :max_per_pass), @default_max_per_pass),
+      max_tries: positive(Keyword.get(cfg, :max_tries), @default_max_tries),
       since: text(Keyword.get(cfg, :since))
     }
   end
@@ -77,6 +80,8 @@ defmodule BotArmyCompanion.Letters.MissionWriter do
         Keyword.get(opts, :since) || settings.since ||
           DateTime.utc_now() |> DateTime.to_iso8601(),
       max_per_pass: Keyword.get(opts, :max_per_pass, settings.max_per_pass),
+      max_tries: Keyword.get(opts, :max_tries, settings.max_tries),
+      tries: %{},
       run: Keyword.get(opts, :run, &Mission.write_new/1),
       in_flight: nil
     }
@@ -88,7 +93,7 @@ defmodule BotArmyCompanion.Letters.MissionWriter do
   @impl true
   def handle_info(:tick, %{in_flight: nil} = state) do
     run = state.run
-    opts = [since: state.since, max_per_pass: state.max_per_pass]
+    opts = [since: state.since, max_per_pass: state.max_per_pass, skip: given_up(state)]
 
     task =
       Task.Supervisor.async_nolink(BotArmyCompanion.TaskSupervisor, fn ->
@@ -111,7 +116,7 @@ defmodule BotArmyCompanion.Letters.MissionWriter do
   def handle_info({ref, result}, %{in_flight: ref} = state) do
     Process.demonitor(ref, [:flush])
     log(result)
-    {:noreply, %{state | in_flight: nil}}
+    {:noreply, %{state | in_flight: nil, tries: count_tries(state.tries, result)}}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{in_flight: ref} = state) do
@@ -120,6 +125,22 @@ defmodule BotArmyCompanion.Letters.MissionWriter do
   end
 
   def handle_info(_other, state), do: {:noreply, state}
+
+  # A letter the model could not get right, after its rewrites, is tried again on a later pass (the
+  # model may do better), but only `max_tries` times: past that it is left alone until the next start,
+  # so a hopeless letter does not cost a model call every pass forever. Only that failure counts. A
+  # model that was down, or an editor that could not be read, says nothing about the letter.
+  defp count_tries(tries, {:ok, results}) when is_list(results) do
+    Enum.reduce(results, tries, fn
+      {id, {:failed, :not_good_enough}}, acc -> Map.update(acc, id, 1, &(&1 + 1))
+      _other, acc -> acc
+    end)
+  end
+
+  defp count_tries(tries, _result), do: tries
+
+  defp given_up(%{tries: tries, max_tries: max}),
+    do: for({id, n} <- tries, n >= max, do: id)
 
   # Counts and reason names only: a letter's words, and a mission's, never reach a log.
   defp log({:ok, []}), do: :ok

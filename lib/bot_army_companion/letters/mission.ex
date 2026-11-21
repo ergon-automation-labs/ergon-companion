@@ -29,11 +29,15 @@ defmodule BotArmyCompanion.Letters.Mission do
   import Ecto.Query
 
   alias BotArmyCompanion.{Letter, Letters, Repo, Sealed}
-  alias BotArmyCompanion.Letters.{Compose, Soul}
+  alias BotArmyCompanion.Letters.{Compose, Grader, Soul, Timing}
 
   @default_max_per_pass 2
   @recent_limit 20
   @rpg_timeout_ms 10_000
+  @default_max_revisions 2
+  @default_min_score 3
+  @grade_attempts 2
+  @grader_max_tokens 400
 
   @outcomes %{
     "critical_success" => "it went brilliantly",
@@ -79,10 +83,14 @@ defmodule BotArmyCompanion.Letters.Mission do
     with {:ok, missions} <- recent(since, opts) do
       told? = Keyword.get(opts, :told?, &told?/1)
       max = Keyword.get(opts, :max_per_pass, @default_max_per_pass)
+      skip = Keyword.get(opts, :skip, [])
+      now = Keyword.get(opts, :now) || DateTime.utc_now()
 
       untold =
         missions
+        |> Enum.reject(&(&1["session_id"] in skip))
         |> Enum.reject(&told?.(&1["session_id"]))
+        |> Enum.filter(&due?(&1, now))
         |> Enum.sort_by(&(&1["ended_at"] || ""))
         |> Enum.take(max)
 
@@ -92,6 +100,18 @@ defmodule BotArmyCompanion.Letters.Mission do
       end
     end
   end
+
+  # A mission letter arrives when a letter would: a few hours after the mission ends in the day, the
+  # next morning when it ended in the evening or overnight (`Letters.Timing`). One whose end time cannot
+  # be read is not told: a letter at the wrong hour is worse than a later one.
+  defp due?(%{"ended_at" => ended}, now) when is_binary(ended) do
+    case DateTime.from_iso8601(ended) do
+      {:ok, at, _offset} -> DateTime.compare(Timing.deliver_at(at), now) != :gt
+      _ -> false
+    end
+  end
+
+  defp due?(_mission, _now), do: false
 
   defp recent(since, opts) do
     payload = %{
@@ -115,7 +135,14 @@ defmodule BotArmyCompanion.Letters.Mission do
   defp write_one(session_id, soul, opts) do
     with {:ok, debrief} <- debrief(session_id, opts),
          {system, user} = compose(soul, debrief, leader(opts)),
-         {:ok, text} <- ask(llm(opts), system, user) do
+         {:ok, draft} <- ask(llm(opts), system, user),
+         ctx = context(session_id, soul, debrief, system, opts),
+         {:ok, text, meta} <- refine(draft, ctx, 0) do
+      Logger.info(
+        "[Letters.Mission] #{session_id} passed after #{meta.revisions} rewrite(s)" <>
+          scores_note(meta.grade)
+      )
+
       store(session_id, text, opts)
     end
   rescue
@@ -123,6 +150,101 @@ defmodule BotArmyCompanion.Letters.Mission do
   catch
     _kind, _reason -> {:failed, :crashed}
   end
+
+  defp context(session_id, soul, debrief, system, opts) do
+    leader = leader(opts)
+
+    %{
+      session_id: session_id,
+      llm: llm(opts),
+      soul: soul,
+      debrief: debrief,
+      leader: leader,
+      system: system,
+      record: record(debrief, leader),
+      min_score: Keyword.get(opts, :min_score, @default_min_score),
+      max_revisions: Keyword.get(opts, :max_revisions, @default_max_revisions),
+      grader_tier: Keyword.get(opts, :grader_tier)
+    }
+  end
+
+  # -- the check before a letter is stored ------------------------------------------------
+
+  # A draft is judged by the rules first (code, free) and only a clean one is shown to the editor (a
+  # model call). A letter that is not good enough is rewritten from the editor's notes, a bounded number
+  # of times; past that it is held, never sent. Nothing of the letter, the record or the editor's words
+  # is logged: only the names of the rules broken and the scores.
+  defp refine(draft, ctx, round) do
+    violations = Grader.rules(draft, ctx.debrief, ctx.leader, ctx.soul)
+
+    with {:ok, grade} <- grade_if_clean(violations, draft, ctx) do
+      case Grader.verdict(violations, grade, ctx.min_score) do
+        :pass -> {:ok, draft, %{revisions: round, grade: grade}}
+        {:revise, notes} -> revise(draft, notes, violations, grade, ctx, round)
+      end
+    end
+  end
+
+  defp grade_if_clean([], draft, ctx), do: grade(draft, ctx)
+  defp grade_if_clean(_violations, _draft, _ctx), do: {:ok, nil}
+
+  defp revise(_draft, _notes, violations, grade, ctx, round) when round >= ctx.max_revisions do
+    Logger.warning(
+      "[Letters.Mission] #{ctx.session_id} not good enough after #{round} rewrite(s): " <>
+        "rules=#{inspect(Enum.map(violations, &elem(&1, 0)))} faithful=#{inspect(grade && grade.faithful)}" <>
+        scores_note(grade)
+    )
+
+    {:failed, :not_good_enough}
+  end
+
+  defp revise(draft, notes, _violations, _grade, ctx, round) do
+    user = Grader.revise_user(ctx.record, draft, notes)
+
+    with {:ok, rewrite} <- ask(ctx.llm, ctx.system, user) do
+      refine(rewrite, ctx, round + 1)
+    end
+  end
+
+  defp grade(draft, ctx) do
+    {system, user} = Grader.grade_prompt(ctx.soul, draft, ctx.debrief, ctx.leader)
+    opts = grader_opts(ctx.grader_tier)
+    grade_attempts(ctx.llm, system, user, opts, @grade_attempts)
+  end
+
+  defp grade_attempts(_llm, _system, _user, _opts, 0), do: {:failed, :ungradable}
+
+  defp grade_attempts(llm, system, user, opts, left) do
+    case llm.answer(system, user, opts) do
+      {:ok, %{text: text}} when is_binary(text) ->
+        case Grader.parse_grade(text) do
+          {:ok, grade} -> {:ok, grade}
+          :error -> grade_attempts(llm, system, user, opts, left - 1)
+        end
+
+      {:error, _reason} ->
+        {:failed, :unavailable}
+
+      _other ->
+        grade_attempts(llm, system, user, opts, left - 1)
+    end
+  end
+
+  # The editor reads the letter through the same sealed path as the writer. A stronger tier may judge
+  # (`grader_tier`), since judging is where a small model is weakest.
+  defp grader_opts(tier) do
+    base =
+      Letters.llm_opts()
+      |> Keyword.put(:think, false)
+      |> Keyword.put(:max_tokens, @grader_max_tokens)
+
+    if is_binary(tier) and tier != "", do: Keyword.put(base, :uncensored_tier, tier), else: base
+  end
+
+  defp scores_note(nil), do: ""
+
+  defp scores_note(grade),
+    do: " (voice/excitement/clarity #{grade.voice}/#{grade.excitement}/#{grade.clarity})"
 
   defp debrief(session_id, opts) do
     case rpg(opts).("rpg.mission.debrief", %{"session_id" => session_id}) do
@@ -174,7 +296,12 @@ defmodule BotArmyCompanion.Letters.Mission do
     {base <> "\n\n" <> String.trim(@instruction), record(debrief, leader_bot_id)}
   end
 
-  defp record(debrief, leader_bot_id) do
+  @doc """
+  The record in words, as the drafter is shown it and as the editor is shown it, so both judge the
+  same account.
+  """
+  @spec record(map(), String.t()) :: String.t()
+  def record(debrief, leader_bot_id) do
     me = leader_name(debrief, leader_bot_id)
 
     [

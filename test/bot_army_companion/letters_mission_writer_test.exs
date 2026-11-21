@@ -173,6 +173,79 @@ defmodule BotArmyCompanion.LettersMissionWriterTest do
     assert log =~ "1 failed (unavailable)"
   end
 
+  describe "a letter the model cannot get right" do
+    # Each tick, the pass is told which missions to leave alone; a mission that comes back as not good
+    # enough is counted, and past the limit it is left alone (until the next start) so a hopeless
+    # letter does not cost a model call every ten minutes forever.
+    defp passes(pid, results_per_pass, test) do
+      Enum.map(results_per_pass, fn _ ->
+        tick(pid)
+        assert_receive {:ran, opts}, 1_000
+        Process.sleep(30)
+        opts
+      end)
+      |> tap(fn _ -> send(test, :done) end)
+    end
+
+    test "is skipped after it has failed to be good enough the allowed number of times" do
+      test = self()
+      Process.put(:n, 0)
+      {:ok, agent} = Agent.start_link(fn -> 0 end)
+
+      pid =
+        start(
+          since: "x",
+          max_tries: 2,
+          run: fn opts ->
+            send(test, {:ran, opts})
+            Agent.update(agent, &(&1 + 1))
+            {:ok, [{"m1", {:failed, :not_good_enough}}]}
+          end
+        )
+
+      [first, second, third] = passes(pid, [1, 2, 3], test)
+
+      assert first[:skip] == []
+      assert second[:skip] == []
+      assert third[:skip] == ["m1"]
+    end
+
+    test "a failure that is the model's, not the letter's, is never counted against it" do
+      test = self()
+
+      pid =
+        start(
+          since: "x",
+          max_tries: 1,
+          run: fn opts ->
+            send(test, {:ran, opts})
+            {:ok, [{"m1", {:failed, :unavailable}}, {"m2", {:failed, :ungradable}}]}
+          end
+        )
+
+      [_, second, third] = passes(pid, [1, 2, 3], test)
+      assert second[:skip] == []
+      assert third[:skip] == []
+    end
+
+    test "a letter that is written is never counted, and one failure among others does not skip the rest" do
+      test = self()
+
+      pid =
+        start(
+          since: "x",
+          max_tries: 1,
+          run: fn opts ->
+            send(test, {:ran, opts})
+            {:ok, [{"m1", :written}, {"m2", {:failed, :not_good_enough}}]}
+          end
+        )
+
+      [_, second] = passes(pid, [1, 2], test)
+      assert second[:skip] == ["m2"]
+    end
+  end
+
   describe "the application's child list" do
     test "starts the writer unless it is turned off" do
       Application.delete_env(:bot_army_companion, :letters)
@@ -187,10 +260,10 @@ defmodule BotArmyCompanion.LettersMissionWriterTest do
   end
 
   describe "settings/0" do
-    test "are on by default, ten minutes apart, two at a time" do
+    test "are on by default, ten minutes apart, two at a time, three tries a letter" do
       Application.delete_env(:bot_army_companion, :letters)
 
-      assert %{enabled: true, interval_ms: 600_000, max_per_pass: 2, since: nil} =
+      assert %{enabled: true, interval_ms: 600_000, max_per_pass: 2, max_tries: 3, since: nil} =
                MissionWriter.settings()
     end
 
