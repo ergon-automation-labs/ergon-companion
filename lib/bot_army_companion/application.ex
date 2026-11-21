@@ -75,7 +75,11 @@ defmodule BotArmyCompanion.Application do
            parse_role(BotArmyLibraryRuntime.ConfigLoader.get("COMPANION_NODE_ROLE", "primary")),
          on_role_change: {BotArmyCompanion.NATS.Consumer, :leader_role_changed, []}},
         # NATS consumer for companion.heartbeat requests
-        {BotArmyCompanion.NATS.Consumer, []}
+        {BotArmyCompanion.NATS.Consumer, []},
+        # The pen pal's clock: writes the replies that have come due (Letters.Worker). It runs a
+        # delivery in a supervised task so a crash in a model call cannot take the clock with it.
+        {Task.Supervisor, name: BotArmyCompanion.TaskSupervisor},
+        {BotArmyCompanion.Letters.Worker, []}
         | children
       ]
     end

@@ -13,6 +13,7 @@ defmodule BotArmyCompanion.NATS.ConsumerSubjectsTest do
 
   @moduletag :nats
 
+  alias BotArmyCompanion.Handlers.LettersHandler
   alias BotArmyCompanion.NATS.Consumer
 
   # The subjects the consumer carried before her reflections had a home. Listed
@@ -56,6 +57,20 @@ defmodule BotArmyCompanion.NATS.ConsumerSubjectsTest do
     assert "companion.reflections.capture" in Consumer.business_subjects()
     assert "companion.reflections.list" in Consumer.business_subjects()
     assert "companion.reflections.read" in Consumer.business_subjects()
+  end
+
+  test "the pen-pal thread's two doors are advertised, subscribed, and the handler's own list" do
+    advertised = Enum.map(Consumer.subjects(), & &1.subject)
+    types = Map.new(Consumer.subjects(), &{&1.subject, &1.type})
+
+    for subject <- LettersHandler.subjects() do
+      assert subject in advertised
+      assert subject in Consumer.business_subjects()
+      assert types[subject] == :request_reply
+    end
+
+    assert Enum.sort(LettersHandler.subjects()) ==
+             Enum.sort(Enum.filter(advertised, &String.starts_with?(&1, "companion.letters.")))
   end
 
   test "nothing is advertised without being subscribed to" do

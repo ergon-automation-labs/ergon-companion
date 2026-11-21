@@ -25,7 +25,31 @@ defmodule BotArmyCompanion.Sealed do
   def aad(direction, request_id) when direction in [:request, :response],
     do: "llm.sealed.v#{@version}|#{direction}|#{request_id}"
 
-  @doc "The key id this bot seals under."
+  @doc """
+  The additional authenticated data for one direction of one request on the letters channel
+  (the 30014 panel). A different purpose string from `aad/2`'s, so an envelope sealed for the
+  LLM bot can never be accepted as a letter request, or the reverse, even under a shared key.
+  """
+  @spec letters_aad(:request | :response, String.t()) :: String.t()
+  def letters_aad(direction, request_id) when direction in [:request, :response],
+    do: "companion.letters.v1|#{direction}|#{request_id}"
+
+  @doc """
+  The additional authenticated data for a letter's body at rest, bound to its row id, so a
+  body copied onto another row does not open.
+  """
+  @spec letter_at_rest_aad(String.t()) :: String.t()
+  def letter_at_rest_aad(letter_id) when is_binary(letter_id),
+    do: "companion.letter.v1|" <> letter_id
+
+  @doc """
+  The key id of the letters channel (the 30014 panel). Fixed, not configured: a kid that
+  could be pointed at the LLM key would turn two separate channels back into one.
+  """
+  @spec letters_kid() :: String.t()
+  def letters_kid, do: "letters1"
+
+  @doc "The key id this bot seals under when it talks to the LLM bot."
   @spec current_kid() :: String.t()
   def current_kid do
     case BotArmyLibraryRuntime.ConfigLoader.get("LLM_SEALED_KID") do
@@ -102,13 +126,24 @@ defmodule BotArmyCompanion.Sealed do
     end
   end
 
+  # The companion is on two channels and holds the key of each: `LLM_SEALED_KEYS` (to the LLM
+  # bot, kid k1) and `LETTERS_SEALED_KEYS` (to the 30014 panel, kid letters1). Their kids differ,
+  # so one lookup serves both and an envelope can only ever open under its own channel's key.
   defp keys do
-    with raw when is_binary(raw) and raw != "" <-
-           BotArmyLibraryRuntime.ConfigLoader.get("LLM_SEALED_KEYS"),
-         {:ok, %{} = map} when map_size(map) > 0 <- Jason.decode(raw) do
-      {:ok, Map.new(map, fn {kid, b64} -> {kid, decode_key(b64)} end)}
+    merged =
+      Enum.reduce(["LLM_SEALED_KEYS", "LETTERS_SEALED_KEYS"], %{}, fn name, acc ->
+        Map.merge(acc, key_set(name))
+      end)
+
+    if map_size(merged) == 0, do: {:error, :sealed_key_not_configured}, else: {:ok, merged}
+  end
+
+  defp key_set(name) do
+    with raw when is_binary(raw) and raw != "" <- BotArmyLibraryRuntime.ConfigLoader.get(name),
+         {:ok, %{} = map} <- Jason.decode(raw) do
+      Map.new(map, fn {kid, b64} -> {kid, decode_key(b64)} end)
     else
-      _ -> {:error, :sealed_key_not_configured}
+      _ -> %{}
     end
   end
 

@@ -13,6 +13,7 @@ defmodule BotArmyCompanion.NATS.Consumer do
   use GenServer
   require Logger
 
+  alias BotArmyCompanion.Handlers.LettersHandler
   alias BotArmyCompanion.JobBell
   alias BotArmyCompanion.PartyNarrator
   alias BotArmyCompanion.Private
@@ -81,6 +82,17 @@ defmodule BotArmyCompanion.NATS.Consumer do
       subject: "companion.reflections.reoffer",
       type: :request_reply,
       description: "Ask the companion to answer a stored reflection again, when nobody ever did"
+    },
+    %{
+      subject: "companion.letters.send",
+      type: :request_reply,
+      description:
+        "Send Abby's letter to Eir. Sealed under the letters key only; Eir answers later, a crisis at once"
+    },
+    %{
+      subject: "companion.letters.thread",
+      type: :request_reply,
+      description: "Read the pen-pal thread, newest last. Sealed under the letters key only"
     },
     %{
       subject: "events.llm.job.completed",
@@ -314,9 +326,36 @@ defmodule BotArmyCompanion.NATS.Consumer do
       "companion.reflections." <> _ ->
         handle_reflections_request(msg)
 
+      # The pen-pal thread. Sealed in, sealed out; see Handlers.LettersHandler.
+      "companion.letters." <> _ ->
+        handle_letters_request(msg)
+
       _ ->
         Logger.debug("Unknown request/reply subject: #{msg.topic}")
     end
+  end
+
+  # Always answers its caller: a refusal, an unreachable store and a crash all become a reply
+  # with a code, never a timeout. Only the exception's module is logged, because a message can
+  # quote a letter.
+  defp handle_letters_request(msg) do
+    response =
+      try do
+        case LettersHandler.handle(msg.topic, decode_body(msg.body)) do
+          {:ok, data} -> Reply.ok(data)
+          {:error, code, message} -> Reply.error(message, code)
+        end
+      rescue
+        e ->
+          Logger.error("[letters] #{msg.topic} crashed (#{inspect(e.__struct__)})")
+          Reply.error("the letters could not be reached", :unavailable)
+      catch
+        kind, _reason ->
+          Logger.error("[letters] #{msg.topic} failed (#{kind})")
+          Reply.error("the letters could not be reached", :unavailable)
+      end
+
+    reply(msg, response)
   end
 
   defp handle_heartbeat_request(msg) do
