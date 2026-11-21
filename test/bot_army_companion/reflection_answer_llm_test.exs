@@ -190,6 +190,32 @@ defmodule BotArmyCompanion.ReflectionAnswerLlmTest do
     refute Map.has_key?(payload, "uncensored_tier")
   end
 
+  test "the request carries think only when it was set, and only as a boolean" do
+    # A local reasoning model on its default settings spends the answer on hidden thinking:
+    # measured 2026-11-20, one sentence took 99 s with it and 2 s with think false.
+    script([:completed])
+    assert {:ok, _} = answer(model_type: "uncensored", think: false)
+    assert_received {:submitted, payload}
+    assert payload["think"] == false
+
+    script([:completed])
+    assert {:ok, _} = answer(model_type: "uncensored", think: true)
+    assert_received {:submitted, payload}
+    assert payload["think"] == true
+
+    for unset <- [nil, "false", 0] do
+      script([:completed])
+      assert {:ok, _} = answer(model_type: "uncensored", think: unset)
+      assert_received {:submitted, payload}
+      refute Map.has_key?(payload, "think"), inspect(unset)
+    end
+
+    script([:completed])
+    assert {:ok, _} = answer(model_type: "uncensored")
+    assert_received {:submitted, payload}
+    refute Map.has_key?(payload, "think")
+  end
+
   defp script(steps), do: Process.put(:status_script, steps)
 
   defp answer(overrides) do

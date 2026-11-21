@@ -102,6 +102,14 @@ defmodule BotArmyCompanion.ReflectionAnswer.Llm.Nats do
         _ -> payload
       end
 
+    # A reasoning model spends its answer on hidden thinking unless told not to; a caller that knows
+    # sets it. Unset, the request says nothing and the model's own default stands.
+    payload =
+      case Keyword.get(opts, :think) do
+        think when is_boolean(think) -> Map.put(payload, "think", think)
+        _ -> payload
+      end
+
     with {:ok, payload, unseal} <- maybe_seal(payload, opts),
          {:ok, job_id} <- submit(payload, opts) do
       with {:ok, result} <- await(job_id, deadline, opts), do: unseal.(result)

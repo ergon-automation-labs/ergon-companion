@@ -80,9 +80,18 @@ defmodule BotArmyCompanion.Application do
         # delivery in a supervised task so a crash in a model call cannot take the clock with it.
         {Task.Supervisor, name: BotArmyCompanion.TaskSupervisor},
         {BotArmyCompanion.Letters.Worker, []}
-        | children
+        | mission_writer() ++ children
       ]
     end
+  end
+
+  # Eir's letters home about her missions. Off with `config :bot_army_companion, :letters,
+  # mission: [enabled: false]`; the pass itself only writes on the primary node.
+  @doc false
+  def mission_writer do
+    if BotArmyCompanion.Letters.MissionWriter.settings().enabled,
+      do: [{BotArmyCompanion.Letters.MissionWriter, []}],
+      else: []
   end
 
   # Skip workers if running during database migrations (release.eval context)
