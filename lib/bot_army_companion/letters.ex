@@ -328,7 +328,10 @@ defmodule BotArmyCompanion.Letters do
   defp prompt_letter(%Letter{} = l) do
     case open_body(l) do
       nil -> []
-      text -> [%{author: l.author, body: text, kind: l.kind}]
+      # `reply?`: whether this letter answered one of hers. A mission letter Eir wrote on her
+      # own account has no `reply_to_id`, and Compose steps over it when it looks for the safety
+      # reply she last sent in answer.
+      text -> [%{author: l.author, body: text, kind: l.kind, reply?: not is_nil(l.reply_to_id)}]
     end
   end
 

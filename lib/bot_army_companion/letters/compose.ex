@@ -83,19 +83,30 @@ defmodule BotArmyCompanion.Letters.Compose do
   @doc """
   Whether the letter being answered comes right after a safety reply.
 
-  True only when the very last of Eir's letters before the new one has `kind: "safety"`. Then
-  the reply is a normal letter that also opens with one gentle line asking how Abby is now: not
-  a second round of resources, not a different tone for the whole letter. A normal reply in
-  between ends it, so the check-in happens once. `kind` is what the store recorded, never read
-  off the wording, so editing the safety text cannot switch this on or off.
+  True only when the last of Eir's letters that *answered* Abby, before the new ones, has
+  `kind: "safety"`. Then the reply is a normal letter that also opens with one gentle line asking
+  how Abby is now: not a second round of resources, not a different tone for the whole letter. A
+  normal reply in between ends it, so the check-in happens once. `kind` is what the store
+  recorded, never read off the wording, so editing the safety text cannot switch this on or off.
+
+  A letter Eir wrote on her own account (a mission letter: no `reply_to`, so `reply?: false`) is
+  not an answer and is stepped over: it must not hide a safety reply that is still the last thing
+  she said to Abby in answer. A thread item with no `:reply?` key is an answer, as every item was
+  before missions existed.
   """
   @spec after_safety?([map()]) :: boolean()
   def after_safety?(thread) when is_list(thread) do
-    # The new letters are the trailing run of Abby's; the one before that run is what counts.
-    case thread |> Enum.reverse() |> Enum.drop_while(&(Map.get(&1, :author) == "abby")) do
+    # The new letters are the trailing run of Abby's; step over unsolicited ones from Eir; the next
+    # one back is what counts.
+    case thread |> Enum.reverse() |> Enum.drop_while(&new_or_unsolicited?(&1)) do
       [prior | _] -> Map.get(prior, :author) == "eir" and Map.get(prior, :kind) == "safety"
       [] -> false
     end
+  end
+
+  defp new_or_unsolicited?(letter) do
+    Map.get(letter, :author) == "abby" or
+      (Map.get(letter, :author) == "eir" and Map.get(letter, :reply?, true) == false)
   end
 
   @check_in "Your last letter to her was the fixed safety message, because something in what she " <>

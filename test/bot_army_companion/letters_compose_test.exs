@@ -168,6 +168,40 @@ defmodule BotArmyCompanion.LettersComposeTest do
       assert {_system, _user} = Compose.prompt(@soul, [%{author: "abby", body: "hi"}])
     end
 
+    test "an unsolicited letter from Eir in between (a mission letter) does not hide the safety reply" do
+      thread = [
+        %{author: "abby", body: "dark one", kind: "normal", reply?: true},
+        %{author: "eir", body: Compose.safety_reply(), kind: "safety", reply?: true},
+        # Written on her own account, not in answer to anything: no reply_to.
+        %{author: "eir", body: "A letter home from the mission", kind: "normal", reply?: false},
+        %{author: "abby", body: "I'm okay today", kind: "normal", reply?: true}
+      ]
+
+      assert Compose.after_safety?(thread)
+    end
+
+    test "but a letter that answered her ends it, as before" do
+      thread = [
+        %{author: "abby", body: "dark one", kind: "normal", reply?: true},
+        %{author: "eir", body: Compose.safety_reply(), kind: "safety", reply?: true},
+        %{author: "eir", body: "A mission letter", kind: "normal", reply?: false},
+        %{author: "abby", body: "thanks", kind: "normal", reply?: true},
+        %{author: "eir", body: "a real reply", kind: "normal", reply?: true},
+        %{author: "abby", body: "later", kind: "normal", reply?: true}
+      ]
+
+      refute Compose.after_safety?(thread)
+    end
+
+    test "only unsolicited letters, with nothing before them, is not after a safety reply" do
+      thread = [
+        %{author: "eir", body: "mission", kind: "normal", reply?: false},
+        %{author: "abby", body: "hi", kind: "normal", reply?: true}
+      ]
+
+      refute Compose.after_safety?(thread)
+    end
+
     test "the check-in still applies when several letters arrive after the safety reply" do
       thread = [
         %{author: "abby", body: "dark one", kind: "normal"},

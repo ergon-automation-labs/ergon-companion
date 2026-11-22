@@ -329,6 +329,39 @@ defmodule BotArmyCompanion.LettersDbTest do
       assert :idle = Worker.run_once([now: ~U[2026-11-20 21:00:02Z]] ++ opts)
     end
 
+    test "a mission letter written after a safety reply does not cancel the gentle check-in" do
+      {%{"letter" => hard, "reply" => safety}, :created} =
+        send!("some days I want to die", "c", @overnight)
+
+      # Eir's own letter home, written on her own account: no reply_to, exactly as mission letters are.
+      id = Ecto.UUID.generate()
+
+      {:ok, body} =
+        Sealed.seal(
+          %{"text" => "A letter home about the owl"},
+          Sealed.letters_kid(),
+          Sealed.letter_at_rest_aad(id)
+        )
+
+      Repo.insert!(%Letter{
+        id: id,
+        author: "eir",
+        body: body,
+        kind: "normal",
+        status: "none",
+        dedupe_key: "mission:abc"
+      })
+
+      send!("I'm okay today", "n", @day)
+      ids = Letters.claim_due(~U[2026-11-20 21:00:01Z])
+
+      assert {:ok, _} = deliver!(ids)
+      assert_received {:asked, system, user, _}
+      assert system =~ "how she is doing now"
+      assert user =~ "A letter home about the owl"
+      assert hard["status"] == "answered" and safety["kind"] == "safety"
+    end
+
     test "a claimed letter that will not open stops delivery rather than answering nothing" do
       {%{"letter" => l}, _} = send!("hello", "a", @day)
       Repo.get!(Letter, l["id"]) |> Ecto.Changeset.change(body: %{"junk" => 1}) |> Repo.update!()
